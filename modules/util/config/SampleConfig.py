@@ -39,6 +39,7 @@ class SampleConfig(BaseConfig):
         self.text_encoder_4_layer_skip = train_config.text_encoder_4_layer_skip
         self.prior_attention_mask = train_config.prior.attention_mask
         self.force_last_timestep = train_config.rescale_noise_scheduler_to_zero_terminal_snr
+        self.cfg_scale = train_config.prior.guidance_scale
 
     @staticmethod
     def default_values():

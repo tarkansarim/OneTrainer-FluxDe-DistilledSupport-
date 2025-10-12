@@ -78,6 +78,17 @@ class FluxSampler(BaseModelSampler):
                 apply_attention_mask=prior_attention_mask,
             )
 
+            # encode negative prompt for CFG (dedistilled models)
+            use_cfg = not transformer.config.guidance_embeds and cfg_scale > 1.0
+            if use_cfg:
+                negative_prompt_embedding, negative_pooled_prompt_embedding = self.model.encode_text(
+                    text=negative_prompt if negative_prompt else "",
+                    train_device=self.train_device,
+                    text_encoder_1_layer_skip=text_encoder_1_layer_skip,
+                    text_encoder_2_layer_skip=text_encoder_2_layer_skip,
+                    apply_attention_mask=prior_attention_mask,
+                )
+
             self.model.text_encoder_to(self.temp_device)
             torch_gc()
 
@@ -117,23 +128,55 @@ class FluxSampler(BaseModelSampler):
 
                 # handle guidance
                 if transformer.config.guidance_embeds:
+                    # Flux Dev: use embedded guidance
                     guidance = torch.tensor([cfg_scale], device=self.train_device)
                     guidance = guidance.expand(latent_model_input.shape[0])
                 else:
                     guidance = None
 
                 # predict the noise residual
-                noise_pred = transformer(
-                    hidden_states=latent_model_input.to(dtype=self.model.train_dtype.torch_dtype()),
-                    timestep=expanded_timestep / 1000,
-                    guidance=guidance.to(dtype=self.model.train_dtype.torch_dtype()),
-                    pooled_projections=pooled_prompt_embedding.to(dtype=self.model.train_dtype.torch_dtype()),
-                    encoder_hidden_states=prompt_embedding.to(dtype=self.model.train_dtype.torch_dtype()),
-                    txt_ids=text_ids.to(dtype=self.model.train_dtype.torch_dtype()),
-                    img_ids=image_ids.to(dtype=self.model.train_dtype.torch_dtype()),
-                    joint_attention_kwargs=None,
-                    return_dict=True
-                ).sample
+                if use_cfg:
+                    # Flux Dedistilled with CFG: two-pass approach
+                    # Double the latent input for unconditional + conditional
+                    latent_model_input_doubled = torch.cat([latent_model_input, latent_model_input], dim=0)
+                    expanded_timestep_doubled = torch.cat([expanded_timestep, expanded_timestep], dim=0)
+                    
+                    # Concatenate negative and positive embeddings
+                    combined_prompt_embedding = torch.cat([negative_prompt_embedding, prompt_embedding], dim=0)
+                    combined_pooled_embedding = torch.cat([negative_pooled_prompt_embedding, pooled_prompt_embedding], dim=0)
+                    
+                    # Note: text_ids and image_ids are positional encodings and should NOT be doubled
+                    # They represent positions, which are the same for both unconditional and conditional passes
+                    
+                    # Single forward pass with doubled batch
+                    noise_pred_combined = transformer(
+                        hidden_states=latent_model_input_doubled.to(dtype=self.model.train_dtype.torch_dtype()),
+                        timestep=expanded_timestep_doubled / 1000,
+                        guidance=None,
+                        pooled_projections=combined_pooled_embedding.to(dtype=self.model.train_dtype.torch_dtype()),
+                        encoder_hidden_states=combined_prompt_embedding.to(dtype=self.model.train_dtype.torch_dtype()),
+                        txt_ids=text_ids.to(dtype=self.model.train_dtype.torch_dtype()),
+                        img_ids=image_ids.to(dtype=self.model.train_dtype.torch_dtype()),
+                        joint_attention_kwargs=None,
+                        return_dict=True
+                    ).sample
+                    
+                    # Split and apply CFG
+                    noise_pred_uncond, noise_pred_cond = noise_pred_combined.chunk(2)
+                    noise_pred = noise_pred_uncond + cfg_scale * (noise_pred_cond - noise_pred_uncond)
+                else:
+                    # Single pass (Flux Dev with embedded guidance, or dedistilled without CFG)
+                    noise_pred = transformer(
+                        hidden_states=latent_model_input.to(dtype=self.model.train_dtype.torch_dtype()),
+                        timestep=expanded_timestep / 1000,
+                        guidance=guidance.to(dtype=self.model.train_dtype.torch_dtype()) if guidance is not None else None,
+                        pooled_projections=pooled_prompt_embedding.to(dtype=self.model.train_dtype.torch_dtype()),
+                        encoder_hidden_states=prompt_embedding.to(dtype=self.model.train_dtype.torch_dtype()),
+                        txt_ids=text_ids.to(dtype=self.model.train_dtype.torch_dtype()),
+                        img_ids=image_ids.to(dtype=self.model.train_dtype.torch_dtype()),
+                        joint_attention_kwargs=None,
+                        return_dict=True
+                    ).sample
 
                 # compute the previous noisy sample x_t -> x_t-1
                 latent_image = noise_scheduler.step(
@@ -318,6 +361,17 @@ class FluxSampler(BaseModelSampler):
                 apply_attention_mask=prior_attention_mask,
             )
 
+            # encode negative prompt for CFG (dedistilled models)
+            use_cfg = not transformer.config.guidance_embeds and cfg_scale > 1.0
+            if use_cfg:
+                negative_prompt_embedding, negative_pooled_prompt_embedding = self.model.encode_text(
+                    text=negative_prompt if negative_prompt else "",
+                    train_device=self.train_device,
+                    text_encoder_1_layer_skip=text_encoder_1_layer_skip,
+                    text_encoder_2_layer_skip=text_encoder_2_layer_skip,
+                    apply_attention_mask=prior_attention_mask,
+                )
+
             self.model.text_encoder_to(self.temp_device)
             torch_gc()
 
@@ -358,23 +412,55 @@ class FluxSampler(BaseModelSampler):
 
                 # handle guidance
                 if transformer.config.guidance_embeds:
+                    # Flux Dev: use embedded guidance
                     guidance = torch.tensor([cfg_scale], device=self.train_device)
                     guidance = guidance.expand(latent_model_input.shape[0])
                 else:
                     guidance = None
 
                 # predict the noise residual
-                noise_pred = transformer(
-                    hidden_states=latent_model_input.to(dtype=self.model.train_dtype.torch_dtype()),
-                    timestep=expanded_timestep / 1000,
-                    guidance=guidance.to(dtype=self.model.train_dtype.torch_dtype()),
-                    pooled_projections=pooled_prompt_embedding.to(dtype=self.model.train_dtype.torch_dtype()),
-                    encoder_hidden_states=prompt_embedding.to(dtype=self.model.train_dtype.torch_dtype()),
-                    txt_ids=text_ids.to(dtype=self.model.train_dtype.torch_dtype()),
-                    img_ids=image_ids.to(dtype=self.model.train_dtype.torch_dtype()),
-                    joint_attention_kwargs=None,
-                    return_dict=True
-                ).sample
+                if use_cfg:
+                    # Flux Dedistilled with CFG: two-pass approach
+                    # Double the latent input for unconditional + conditional
+                    latent_model_input_doubled = torch.cat([latent_model_input, latent_model_input], dim=0)
+                    expanded_timestep_doubled = torch.cat([expanded_timestep, expanded_timestep], dim=0)
+                    
+                    # Concatenate negative and positive embeddings
+                    combined_prompt_embedding = torch.cat([negative_prompt_embedding, prompt_embedding], dim=0)
+                    combined_pooled_embedding = torch.cat([negative_pooled_prompt_embedding, pooled_prompt_embedding], dim=0)
+                    
+                    # Note: text_ids and image_ids are positional encodings and should NOT be doubled
+                    # They represent positions, which are the same for both unconditional and conditional passes
+                    
+                    # Single forward pass with doubled batch
+                    noise_pred_combined = transformer(
+                        hidden_states=latent_model_input_doubled.to(dtype=self.model.train_dtype.torch_dtype()),
+                        timestep=expanded_timestep_doubled / 1000,
+                        guidance=None,
+                        pooled_projections=combined_pooled_embedding.to(dtype=self.model.train_dtype.torch_dtype()),
+                        encoder_hidden_states=combined_prompt_embedding.to(dtype=self.model.train_dtype.torch_dtype()),
+                        txt_ids=text_ids.to(dtype=self.model.train_dtype.torch_dtype()),
+                        img_ids=image_ids.to(dtype=self.model.train_dtype.torch_dtype()),
+                        joint_attention_kwargs=None,
+                        return_dict=True
+                    ).sample
+                    
+                    # Split and apply CFG
+                    noise_pred_uncond, noise_pred_cond = noise_pred_combined.chunk(2)
+                    noise_pred = noise_pred_uncond + cfg_scale * (noise_pred_cond - noise_pred_uncond)
+                else:
+                    # Single pass (Flux Dev with embedded guidance, or dedistilled without CFG)
+                    noise_pred = transformer(
+                        hidden_states=latent_model_input.to(dtype=self.model.train_dtype.torch_dtype()),
+                        timestep=expanded_timestep / 1000,
+                        guidance=guidance.to(dtype=self.model.train_dtype.torch_dtype()) if guidance is not None else None,
+                        pooled_projections=pooled_prompt_embedding.to(dtype=self.model.train_dtype.torch_dtype()),
+                        encoder_hidden_states=prompt_embedding.to(dtype=self.model.train_dtype.torch_dtype()),
+                        txt_ids=text_ids.to(dtype=self.model.train_dtype.torch_dtype()),
+                        img_ids=image_ids.to(dtype=self.model.train_dtype.torch_dtype()),
+                        joint_attention_kwargs=None,
+                        return_dict=True
+                    ).sample
 
                 # compute the previous noisy sample x_t -> x_t-1
                 latent_image = noise_scheduler.step(

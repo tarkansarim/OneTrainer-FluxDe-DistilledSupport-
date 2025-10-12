@@ -1,12 +1,15 @@
-# OneTrainer
+# OneTrainer - Flux Dev Dedistilled Fork
 
 OneTrainer is a one-stop solution for all your Diffusion training needs.
+
+> [!NOTE]
+> **This fork adds complete support for Flux Dev Dedistilled models**, including traditional CFG during sampling, negative prompts, and crash prevention. All changes are automatic and backward-compatible with regular Flux Dev. See [Flux Dev Dedistilled Support](#flux-dev-dedistilled-support) section below for details.
 
 <a href="https://discord.gg/KwgcQd5scF"><img src="https://discord.com/api/guilds/1102003518203756564/widget.png" alt="OneTrainer Discord"/></a><br>
 
 ## Features
 
--   **Supported models**: Qwen Image, FLUX.1, Chroma, Stable Diffusion 1.5, 2.0, 2.1, 3.0, 3.5, SDXL, Würstchen-v2, Stable Cascade,
+-   **Supported models**: Qwen Image, FLUX.1 (including Flux Dev Dedistilled), Chroma, Stable Diffusion 1.5, 2.0, 2.1, 3.0, 3.5, SDXL, Würstchen-v2, Stable Cascade,
     PixArt-Alpha, PixArt-Sigma, Sana, Hunyuan Video and inpainting models
 -   **Model formats**: diffusers and ckpt models
 -   **Training methods**: Full fine-tuning, LoRA, embeddings
@@ -77,6 +80,62 @@ OneTrainer is a one-stop solution for all your Diffusion training needs.
 2. Pull changes `git pull`
 3. Activate the venv `venv/scripts/activate`
 4. Re-install all requirements `pip install -r requirements.txt --force-reinstall`
+
+## Flux Dev Dedistilled Support
+
+This fork includes comprehensive support for **Flux Dev Dedistilled** models, which are distilled variants of Flux Dev that enable traditional Classifier-Free Guidance (CFG) during inference.
+
+### What's Included
+
+-   ✅ **Crash Prevention**: Fixed `AttributeError` when training with dedistilled models
+-   ✅ **Traditional CFG**: Automatic two-pass inference for dedistilled models during sample generation
+-   ✅ **Negative Prompt Support**: Full support for negative prompts in sampling
+-   ✅ **Proper Guidance Scaling**: Guidance scale parameters correctly passed from training config to sampling
+-   ✅ **Auto-Detection**: Automatically detects dedistilled vs regular Flux Dev via `guidance_embeds` config parameter
+-   ✅ **Zero Impact on Regular Flux**: All fixes are conditional - regular Flux Dev models work exactly as before
+
+### Key Features
+
+**For Training:**
+- Train Flux Dev Dedistilled LoRAs without crashes
+- Same training parameters and workflow as regular Flux Dev
+- Automatic model type detection (no manual configuration needed)
+
+**For Sampling:**
+- Traditional CFG with unconditional + conditional passes
+- Negative prompt support during sample generation
+- Correct positional encoding handling (matching official implementation)
+- Better sample quality during training with proper CFG
+
+### Technical Details
+
+The implementation follows the official `pipeline_flux_de_distill.py` specification and matches behavior from other trainers like Kohya's sd-scripts. Key changes include:
+
+1. **Guidance None-Safety**: Added conditional checks for guidance parameters in both training and sampling
+2. **CFG Detection**: Automatic detection via `transformer.config.guidance_embeds == False`
+3. **Two-Pass Inference**: Proper implementation of unconditional/conditional approach with correct CFG formula
+4. **Parameter Passing**: Fixed guidance_scale propagation from training config to sample generation
+
+### Files Modified
+
+-   `modules/modelSampler/FluxSampler.py` - Added CFG support and crash prevention
+-   `modules/modelSetup/BaseFluxSetup.py` - Training crash prevention
+-   `modules/util/config/SampleConfig.py` - Guidance scale parameter copying
+
+### Documentation
+
+For complete technical documentation, see [FLUX_DEDISTILLED_FIXES.md](FLUX_DEDISTILLED_FIXES.md)
+
+### Usage
+
+Training Flux Dev Dedistilled works exactly like regular Flux Dev:
+
+1. Load your Flux Dev Dedistilled model in diffusers format
+2. Configure training parameters (recommended LR: `1e-4` for LoRA)
+3. Set guidance_scale in training tab (recommended: `3.5`)
+4. Train normally - everything else is automatic!
+
+Sample images during training will automatically use traditional CFG if your model is dedistilled.
 
 ## Usage
 
