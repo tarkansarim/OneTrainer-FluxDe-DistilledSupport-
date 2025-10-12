@@ -83,7 +83,7 @@ OneTrainer is a one-stop solution for all your Diffusion training needs.
 
 ## Flux Dev Dedistilled Support
 
-This fork includes comprehensive support for **Flux Dev Dedistilled** models, which are distilled variants of Flux Dev that enable traditional Classifier-Free Guidance (CFG) during inference.
+This fork includes comprehensive support for **Flux Dev Dedistilled** models, which are variants of Flux Dev with guidance distillation removed, requiring traditional Classifier-Free Guidance (CFG) during inference.
 
 ### What's Included
 
