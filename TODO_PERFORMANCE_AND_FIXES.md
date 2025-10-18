@@ -1,18 +1,18 @@
 # TODO: Performance Optimizations and Bug Fixes
 
-## ✅ COMPLETED: GPU Selection Bug Fix
+## ✅ COMPLETED: GPU Selection Bug Fixes
 
-### Issue
+### Fix 1: BaseTrainer Device Selection
 **Location:** `modules/trainer/BaseTrainer.py` line 33
 **Problem:** `device_indexes` parameter was ignored when `multi_gpu` was False, always defaulting to GPU 0
 
-### Solution Applied
+**Solution Applied:**
 Modified `BaseTrainer.__init__()` to respect `device_indexes` even in single-GPU mode:
 - When `multi_gpu=False` and `device_indexes` is set (e.g., "1"), it now uses the specified GPU
 - When `multi_gpu=True`, MultiTrainer handles device selection as before
 - Maintains backward compatibility with existing configurations
 
-### Testing
+**Testing:**
 All test cases passed:
 - ✓ Default behavior (no device_indexes) → uses cuda (GPU 0)
 - ✓ device_indexes='1', multi_gpu=False → uses cuda:1
@@ -20,11 +20,27 @@ All test cases passed:
 - ✓ device_indexes='1,2', multi_gpu=False → uses cuda:1 (first in list)
 - ✓ multi_gpu=True → delegates to MultiTrainer
 
+### Fix 2: MGDS Device Initialization
+**Location:** `modules/dataLoader/mixin/DataLoaderMgdsMixin.py` line 43
+**Problem:** When `device_indexes` was set and latent caching was disabled, MGDS was initialized with `torch.device(config.train_device)` which uses the string "cuda" instead of the properly configured device object that respects `device_indexes`. This caused image tensors to be created on the default GPU (cuda:0) while the VAE was on the specified GPU, causing device mismatch errors.
+
+**Solution Applied:**
+Changed MGDS initialization to use `self.train_device` instead of `torch.device(config.train_device)`:
+- `self.train_device` is the correctly configured `torch.device` object from `BaseTrainer` that respects `device_indexes`
+- MGDS passes this device to all its pipeline modules (LoadImage, EncodeVAE, etc.)
+- All tensors created by MGDS are now automatically placed on the correct GPU
+
+**Testing:**
+- ✓ device_indexes='1', multi_gpu=False, latent_caching=False → no device mismatch
+- ✓ device_indexes='1', multi_gpu=False, latent_caching=True → works as before
+- ✓ Default behavior (no device_indexes) → works as before
+
 ### Usage
 Users can now select a specific GPU without enabling multi-GPU mode:
 1. Keep "Multi-GPU" switch **OFF**
 2. Set "Device Indexes" to desired GPU number (e.g., "1" for GPU 1)
 3. Train on that single GPU without distributed training overhead
+4. Works with both latent caching enabled and disabled
 
 ---
 

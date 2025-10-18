@@ -38,8 +38,9 @@ class DataLoaderMgdsMixin(metaclass=ABCMeta):
         }
 
         # Just defaults for now.
+        # Use self.train_device instead of config.train_device to respect device_indexes
         ds = MGDS(
-            torch.device(config.train_device),
+            self.train_device,
             concepts,
             settings,
             definition,

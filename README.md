@@ -141,11 +141,13 @@ Sample images during training will automatically use traditional CFG if your mod
 
 ### GPU Selection Fix
 
-This fork includes a fix for GPU selection in single-GPU mode:
+This fork includes comprehensive fixes for GPU selection in single-GPU mode:
 
 -   ✅ **Device Index Support**: The `device_indexes` parameter now works correctly without enabling multi-GPU mode
 -   ✅ **GUI Compatibility**: Select any GPU directly from the GUI without multi-GPU overhead
 -   ✅ **CLI Parity**: GUI now behaves the same as CLI for GPU selection
+-   ✅ **Proper Device Assignment**: All model components (VAE, text encoders) and data tensors are placed on the specified GPU
+-   ✅ **Latent Caching Support**: Works with both latent caching enabled and disabled
 -   ✅ **Backward Compatible**: Existing configurations continue to work as before
 
 **How to Use:**
@@ -153,9 +155,13 @@ This fork includes a fix for GPU selection in single-GPU mode:
 2. Set "Device Indexes" to your desired GPU number (e.g., `1` for GPU 1, `2` for GPU 2)
 3. Train on the selected GPU without distributed training overhead
 
-**Previously:** Setting `device_indexes` in the GUI had no effect unless multi-GPU mode was enabled, always defaulting to GPU 0.
+**Previously:** 
+- Setting `device_indexes` in the GUI had no effect unless multi-GPU mode was enabled, always defaulting to GPU 0
+- VAE and data tensors could end up on different GPUs, causing device mismatch errors
 
-**Now:** You can select any GPU for single-GPU training, matching the CLI behavior.
+**Now:** 
+- You can select any GPU for single-GPU training, matching the CLI behavior
+- All model components and data are correctly placed on the specified GPU, preventing device mismatch errors
 
 ## Usage
 
