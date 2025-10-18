@@ -3,7 +3,7 @@
 OneTrainer is a one-stop solution for all your Diffusion training needs.
 
 > [!NOTE]
-> **This fork adds complete support for Flux Dev Dedistilled models**, including traditional CFG during sampling, negative prompts, and crash prevention. All changes are automatic and backward-compatible with regular Flux Dev. See [Flux Dev Dedistilled Support](#flux-dev-dedistilled-support) section below for details.
+> **This fork adds complete support for Flux Dev Dedistilled models** and **fixes GPU selection in single-GPU mode**. Includes traditional CFG during sampling, negative prompts, crash prevention, and proper device index handling in the GUI. All changes are automatic and backward-compatible. See [Flux Dev Dedistilled Support](#flux-dev-dedistilled-support) and [Additional Improvements](#additional-improvements-in-this-fork) sections below for details.
 
 <a href="https://discord.gg/KwgcQd5scF"><img src="https://discord.com/api/guilds/1102003518203756564/widget.png" alt="OneTrainer Discord"/></a><br>
 
@@ -136,6 +136,26 @@ Training Flux Dev Dedistilled works exactly like regular Flux Dev:
 4. Train normally - everything else is automatic!
 
 Sample images during training will automatically use traditional CFG if your model is dedistilled.
+
+## Additional Improvements in This Fork
+
+### GPU Selection Fix
+
+This fork includes a fix for GPU selection in single-GPU mode:
+
+-   ✅ **Device Index Support**: The `device_indexes` parameter now works correctly without enabling multi-GPU mode
+-   ✅ **GUI Compatibility**: Select any GPU directly from the GUI without multi-GPU overhead
+-   ✅ **CLI Parity**: GUI now behaves the same as CLI for GPU selection
+-   ✅ **Backward Compatible**: Existing configurations continue to work as before
+
+**How to Use:**
+1. In the GUI, keep "Multi-GPU" switch **OFF**
+2. Set "Device Indexes" to your desired GPU number (e.g., `1` for GPU 1, `2` for GPU 2)
+3. Train on the selected GPU without distributed training overhead
+
+**Previously:** Setting `device_indexes` in the GUI had no effect unless multi-GPU mode was enabled, always defaulting to GPU 0.
+
+**Now:** You can select any GPU for single-GPU training, matching the CLI behavior.
 
 ## Usage
 
