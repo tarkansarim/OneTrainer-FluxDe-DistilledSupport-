@@ -30,7 +30,19 @@ class BaseTrainer(
         self.config = config
         self.callbacks = callbacks
         self.commands = commands
-        self.train_device = torch.device(self.config.train_device)
+        
+        # Respect device_indexes even in single-GPU mode
+        # If device_indexes is set and we're not doing multi-GPU training,
+        # use the first device index specified
+        if config.device_indexes and not config.multi_gpu:
+            device_index = config.device_indexes.split(',')[0].strip()
+            if device_index:
+                self.train_device = torch.device(self.config.train_device, int(device_index))
+            else:
+                self.train_device = torch.device(self.config.train_device)
+        else:
+            self.train_device = torch.device(self.config.train_device)
+        
         self.temp_device = torch.device(self.config.temp_device)
 
     @abstractmethod
