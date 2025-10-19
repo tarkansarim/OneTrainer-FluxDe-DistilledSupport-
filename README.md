@@ -150,6 +150,13 @@ This fork includes comprehensive fixes for GPU selection in single-GPU mode:
 -   ✅ **Latent Caching Support**: Works with both latent caching enabled and disabled
 -   ✅ **Backward Compatible**: Existing configurations continue to work as before
 
+### T5 Token Limit Unlocked for Flux
+
+-   ✅ **Extended Token Limit**: T5 text encoder (text_encoder_2) now supports up to **512 tokens** (increased from 77)
+-   ✅ **Long Prompts**: Write detailed, complex prompts without truncation
+-   ✅ **CLIP Unchanged**: CLIP text encoder (text_encoder_1) remains at 77 tokens as per its architecture
+-   ✅ **Performance Note**: Longer prompts may use slightly more VRAM and take marginally longer to encode
+
 **How to Use:**
 1. In the GUI, keep "Multi-GPU" switch **OFF**
 2. Set "Device Indexes" to your desired GPU number (e.g., `1` for GPU 1, `2` for GPU 2)

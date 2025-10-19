@@ -227,7 +227,7 @@ class FluxModel(BaseModel):
                 self.add_text_encoder_2_embeddings_to_prompt(text),
                 padding='max_length',
                 truncation=True,
-                max_length=77,
+                max_length=512,  # T5 supports up to 512 tokens (increased from 77)
                 return_tensors="pt",
             )
             tokens_2 = tokenizer_output.input_ids.to(self.text_encoder_2.device)
