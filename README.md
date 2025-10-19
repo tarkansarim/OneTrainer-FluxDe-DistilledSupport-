@@ -3,7 +3,7 @@
 OneTrainer is a one-stop solution for all your Diffusion training needs.
 
 > [!NOTE]
-> **This fork adds complete support for Flux Dev Dedistilled models** and **fixes GPU selection in single-GPU mode**. Includes traditional CFG during sampling, negative prompts, crash prevention, and proper device index handling in the GUI. All changes are automatic and backward-compatible. See [Flux Dev Dedistilled Support](#flux-dev-dedistilled-support) and [Additional Improvements](#additional-improvements-in-this-fork) sections below for details.
+> **This fork adds complete support for Flux Dev Dedistilled models**, **fixes GPU selection in single-GPU mode**, **unlocks T5 token limit to 512**, and **fixes Flux Dev sampling guidance**. Includes traditional CFG during sampling, negative prompts, crash prevention, proper device index handling, extended prompt support, and proper sample quality. All changes are automatic and backward-compatible. See [Flux Dev Dedistilled Support](#flux-dev-dedistilled-support) and [Additional Improvements](#additional-improvements-in-this-fork) sections below for details.
 
 <a href="https://discord.gg/KwgcQd5scF"><img src="https://discord.com/api/guilds/1102003518203756564/widget.png" alt="OneTrainer Discord"/></a><br>
 
