@@ -128,8 +128,11 @@ class FluxSampler(BaseModelSampler):
 
                 # handle guidance
                 if transformer.config.guidance_embeds:
-                    # Flux Dev: use embedded guidance
-                    guidance = torch.tensor([cfg_scale], device=self.train_device)
+                    # Flux Dev: use embedded guidance parameter
+                    # During training, cfg_scale comes from config.prior.guidance_scale (1.0)
+                    # During sampling, boost to 3.5 for better quality if it's at training level
+                    embedded_guidance_value = 3.5 if cfg_scale <= 1.0 else cfg_scale
+                    guidance = torch.tensor([embedded_guidance_value], device=self.train_device)
                     guidance = guidance.expand(latent_model_input.shape[0])
                 else:
                     guidance = None

@@ -157,6 +157,14 @@ This fork includes comprehensive fixes for GPU selection in single-GPU mode:
 -   ✅ **CLIP Unchanged**: CLIP text encoder (text_encoder_1) remains at 77 tokens as per its architecture
 -   ✅ **Performance Note**: Longer prompts may use slightly more VRAM and take marginally longer to encode
 
+### Flux Dev Sampling Guidance Fix
+
+-   ✅ **Proper Sample Quality**: Flux Dev samples now use embedded guidance value of 3.5 during sampling (instead of copying training value of 1.0)
+-   ✅ **No More Washed Out Samples**: Fixes the issue where samples appeared washed out with poor contrast
+-   ✅ **Training Unchanged**: Training still uses guidance_scale = 1.0 as intended
+-   ✅ **Dedistilled Unaffected**: Flux Dev Dedistilled continues to work correctly with CFG = 3.5
+-   ✅ **Automatic Detection**: No configuration changes needed - the fix automatically detects Flux Dev and applies appropriate guidance
+
 **How to Use:**
 1. In the GUI, keep "Multi-GPU" switch **OFF**
 2. Set "Device Indexes" to your desired GPU number (e.g., `1` for GPU 1, `2` for GPU 2)
