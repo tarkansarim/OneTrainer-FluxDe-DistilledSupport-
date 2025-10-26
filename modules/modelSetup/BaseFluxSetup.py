@@ -208,7 +208,8 @@ class BaseFluxSetup(
     ) -> dict:
         with model.autocast_context:
             batch_seed = 0 if deterministic else train_progress.global_step * multi.world_size() + multi.rank()
-            generator = torch.Generator(device=config.train_device)
+            # Use the actual training device (respects device_indexes) for RNG
+            generator = torch.Generator(device=self.train_device)
             generator.manual_seed(batch_seed)
             rand = Random(batch_seed)
 
@@ -234,12 +235,14 @@ class BaseFluxSetup(
             )
 
             latent_image = batch['latent_image']
+            # Ensure all key tensors are on the train device
+            latent_image = latent_image.to(self.train_device)
             scaled_latent_image = (latent_image - vae_shift_factor) * vae_scaling_factor
 
             scaled_latent_conditioning_image = None
             if config.model_type.has_conditioning_image_input():
                 scaled_latent_conditioning_image = \
-                    (batch['latent_conditioning_image'] - vae_shift_factor) * vae_scaling_factor
+                    (batch['latent_conditioning_image'].to(self.train_device) - vae_shift_factor) * vae_scaling_factor
 
             latent_noise = self._create_noise(scaled_latent_image, config, generator)
 

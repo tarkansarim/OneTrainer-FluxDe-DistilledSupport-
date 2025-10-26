@@ -1,8 +1,9 @@
 from modules.model.FluxModel import FluxModel
 from modules.modelSetup.BaseFluxSetup import BaseFluxSetup
 from modules.util.config.TrainConfig import TrainConfig
+from modules.util.flux_block_util import get_block_name_from_parameter
 from modules.util.ModuleFilter import ModuleFilter
-from modules.util.NamedParameterGroup import NamedParameterGroupCollection
+from modules.util.NamedParameterGroup import NamedParameterGroup, NamedParameterGroupCollection
 from modules.util.optimizer_util import init_model_parameters
 from modules.util.TrainProgress import TrainProgress
 
@@ -47,9 +48,99 @@ class FluxFineTuneSetup(
                     "embeddings_2"
                 )
 
-        self._create_model_part_parameters(parameter_group_collection, "transformer", model.transformer, config.prior,
-                                           freeze=ModuleFilter.create(config), debug=config.debug_mode)
+        # Transformer: Check if block-wise LRs are enabled
+        freeze_filter = ModuleFilter.create(config)
+        if config.block_learning_rate_multiplier and config.layer_filter_preset == "blocks":
+            self._create_block_wise_parameters(
+                parameter_group_collection,
+                model.transformer,
+                config,
+                freeze=freeze_filter
+            )
+        else:
+            # Default behavior: single parameter group
+            self._create_model_part_parameters(parameter_group_collection, "transformer", model.transformer, config.prior,
+                                               freeze=freeze_filter, debug=config.debug_mode)
+        
         return parameter_group_collection
+    
+    def _create_block_wise_parameters(
+            self,
+            parameter_group_collection: NamedParameterGroupCollection,
+            transformer,
+            config: TrainConfig,
+            freeze=None
+    ):
+        """Create separate parameter groups for each block with individual learning rates"""
+        if transformer is None:
+            return
+        
+        if not config.prior.train:
+            return
+        
+        base_lr = config.prior.learning_rate if config.prior.learning_rate else config.learning_rate
+        block_lr_multipliers = config.block_learning_rate_multiplier
+        
+        # Group parameters by block
+        block_params = {}  # Maps block_name -> list of parameters
+        frozen_params = []
+        
+        # For fine-tuning, transformer is the actual model, not a LoRAModuleWrapper
+        for name, param in transformer.named_parameters():
+            # Check if this parameter should be frozen
+            if freeze is not None and len(freeze) > 0:
+                if any(f.matches(name) for f in freeze):
+                    # This parameter should be trained
+                    block_name = get_block_name_from_parameter(name)
+                    
+                    if block_name is None:
+                        # Parameters that don't belong to a specific block
+                        block_name = "other"
+                    
+                    if block_name not in block_params:
+                        block_params[block_name] = []
+                    block_params[block_name].append(param)
+                else:
+                    # This parameter should be frozen
+                    frozen_params.append(param)
+            else:
+                # No freeze filter, train all parameters
+                block_name = get_block_name_from_parameter(name)
+                
+                if block_name is None:
+                    block_name = "other"
+                
+                if block_name not in block_params:
+                    block_params[block_name] = []
+                block_params[block_name].append(param)
+        
+        # Store frozen parameters
+        if frozen_params:
+            self.frozen_parameters["transformer"] = frozen_params
+        
+        # Create parameter groups with individual LRs
+        if config.debug_mode:
+            print(f"[BlockLR] Using block-wise learning rates with base_lr={base_lr:.8g}")
+
+        for block_name, params in block_params.items():
+            multiplier = block_lr_multipliers.get(block_name, 1.0)
+            block_lr = base_lr * multiplier
+            if config.debug_mode:
+                try:
+                    param_count = sum(p.numel() for p in params)
+                except Exception:
+                    param_count = len(list(params))
+                print(
+                    f"[BlockLR][FT] transformer_{block_name}: "
+                    f"base_lr={base_lr:.8g}, multiplier={multiplier:.6g}, "
+                    f"final_lr={block_lr:.8g}, params={param_count}"
+                )
+            
+            parameter_group_collection.add_group(NamedParameterGroup(
+                unique_name=f"transformer_{block_name}",
+                parameters=params,
+                learning_rate=block_lr
+            ))
 
     def __setup_requires_grad(
             self,

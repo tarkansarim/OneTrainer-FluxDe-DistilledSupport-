@@ -376,6 +376,7 @@ class TrainConfig(BaseConfig):
     layer_filter: str  # comma-separated
     layer_filter_preset: str
     layer_filter_regex: bool
+    block_learning_rate_multiplier: dict[str, float]  # Maps block names to LR multipliers (0-1)
 
     # noise
     offset_noise_weight: float
@@ -1022,6 +1023,7 @@ class TrainConfig(BaseConfig):
         data.append(("layer_filter", "", str, False))
         data.append(("layer_filter_preset", "full", str, False))
         data.append(("layer_filter_regex", False, bool, False))
+        data.append(("block_learning_rate_multiplier", {}, dict, False))
 
         # embedding
         data.append(("embedding_learning_rate", None, float, True))

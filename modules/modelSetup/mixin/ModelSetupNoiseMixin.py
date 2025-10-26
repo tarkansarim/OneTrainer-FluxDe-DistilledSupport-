@@ -82,10 +82,11 @@ class ModelSetupNoiseMixin(metaclass=ABCMeta):
             timestep: Tensor | None = None,
             betas: Tensor | None = None,
     ) -> Tensor:
+        # Always allocate noise on the same device as the source tensor to avoid device mismatch
         noise = torch.randn(
             source_tensor.shape,
             generator=generator,
-            device=config.train_device,
+            device=source_tensor.device,
             dtype=source_tensor.dtype
         )
 
@@ -93,7 +94,7 @@ class ModelSetupNoiseMixin(metaclass=ABCMeta):
             offset_noise = torch.randn(
                 (source_tensor.shape[0], source_tensor.shape[1], *[1 for _ in range(source_tensor.ndim - 2)]),
                 generator=generator,
-                device=config.train_device,
+                device=source_tensor.device,
                 dtype=source_tensor.dtype
             )
             # Use the time-dependent generalized method if enabled.
@@ -111,7 +112,7 @@ class ModelSetupNoiseMixin(metaclass=ABCMeta):
             perturbation_noise = torch.randn(
                 source_tensor.shape,
                 generator=generator,
-                device=config.train_device,
+                device=source_tensor.device,
                 dtype=source_tensor.dtype
             )
             noise = noise + (config.perturbation_noise_weight * perturbation_noise)

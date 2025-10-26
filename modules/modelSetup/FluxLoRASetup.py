@@ -2,7 +2,8 @@ from modules.model.FluxModel import FluxModel
 from modules.modelSetup.BaseFluxSetup import BaseFluxSetup
 from modules.module.LoRAModule import LoRAModuleWrapper
 from modules.util.config.TrainConfig import TrainConfig
-from modules.util.NamedParameterGroup import NamedParameterGroupCollection
+from modules.util.flux_block_util import get_block_name_from_parameter
+from modules.util.NamedParameterGroup import NamedParameterGroup, NamedParameterGroupCollection
 from modules.util.optimizer_util import init_model_parameters
 from modules.util.torch_util import state_dict_has_prefix
 from modules.util.TrainProgress import TrainProgress
@@ -48,8 +49,72 @@ class FluxLoRASetup(
                     "embeddings_2"
                 )
 
-        self._create_model_part_parameters(parameter_group_collection, "transformer_lora", model.transformer_lora, config.prior)
+        # Transformer: Check if block-wise LRs are enabled
+        if config.block_learning_rate_multiplier and config.layer_filter_preset == "blocks":
+            self._create_block_wise_parameters(
+                parameter_group_collection,
+                model.transformer_lora,
+                config
+            )
+        else:
+            # Default behavior: single parameter group
+            self._create_model_part_parameters(parameter_group_collection, "transformer_lora", model.transformer_lora, config.prior)
+        
         return parameter_group_collection
+    
+    def _create_block_wise_parameters(
+            self,
+            parameter_group_collection: NamedParameterGroupCollection,
+            transformer_lora,
+            config: TrainConfig
+    ):
+        """Create separate parameter groups for each block with individual learning rates"""
+        if transformer_lora is None:
+            return
+        
+        base_lr = config.prior.learning_rate if config.prior.learning_rate else config.learning_rate
+        block_lr_multipliers = config.block_learning_rate_multiplier
+        
+        # Group parameters by block
+        block_params = {}  # Maps block_name -> list of parameters
+        
+        # LoRAModuleWrapper stores modules in lora_modules dict
+        for name, lora_module in transformer_lora.lora_modules.items():
+            block_name = get_block_name_from_parameter(name)
+            
+            if block_name is None:
+                # Parameters that don't belong to a specific block (e.g., norm layers)
+                block_name = "other"
+            
+            if block_name not in block_params:
+                block_params[block_name] = []
+            
+            # Get all parameters from this LoRA module
+            block_params[block_name].extend(lora_module.parameters())
+        
+        # Create parameter groups with individual LRs
+        if config.debug_mode:
+            print(f"[BlockLR] Using block-wise learning rates with base_lr={base_lr:.8g}")
+
+        for block_name, params in block_params.items():
+            multiplier = block_lr_multipliers.get(block_name, 1.0)
+            block_lr = base_lr * multiplier
+            if config.debug_mode:
+                try:
+                    param_count = sum(p.numel() for p in params)
+                except Exception:
+                    param_count = len(list(params))
+                print(
+                    f"[BlockLR][LoRA] transformer_{block_name}: "
+                    f"base_lr={base_lr:.8g}, multiplier={multiplier:.6g}, "
+                    f"final_lr={block_lr:.8g}, params={param_count}"
+                )
+            
+            parameter_group_collection.add_group(NamedParameterGroup(
+                unique_name=f"transformer_{block_name}",
+                parameters=params,
+                learning_rate=block_lr
+            ))
 
     def __setup_requires_grad(
             self,

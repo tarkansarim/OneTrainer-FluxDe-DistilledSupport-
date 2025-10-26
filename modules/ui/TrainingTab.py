@@ -9,6 +9,7 @@ from modules.modelSetup.BaseStableDiffusion3Setup import PRESETS as sd3_presets
 from modules.modelSetup.BaseStableDiffusionSetup import PRESETS as sd_presets
 from modules.modelSetup.BaseStableDiffusionXLSetup import PRESETS as sdxl_presets
 from modules.modelSetup.BaseWuerstchenSetup import PRESETS as sc_presets
+from modules.ui.BlockLearningRateWindow import BlockLearningRateWindow
 from modules.ui.OffloadingWindow import OffloadingWindow
 from modules.ui.OptimizerParamsWindow import OptimizerParamsWindow
 from modules.ui.SchedulerParamsWindow import SchedulerParamsWindow
@@ -767,11 +768,8 @@ class TrainingTab:
 
         components.label(frame, 0, 0, "Layer Filter",
                          tooltip="Select a preset defining which layers to train, or select 'Custom' to define your own. A blank custom field will train all layers.")
-        self.layer_selector = components.options(
-            frame, 0, 1, self.presets_list, self.ui_state, "layer_filter_preset",
-            command=self.__preset_set_layer_choice
-        )
-
+        
+        # Create entry field and switches first, before the dropdown that triggers callbacks
         self.layer_entry = components.entry(
             frame, 1, 0, self.ui_state, "layer_filter",
             tooltip="Comma-separated list of diffusion layers to train. Regular expressions (if toggled) are supported. Any model layer with a matching name will be trained"
@@ -786,6 +784,14 @@ class TrainingTab:
         self.regex_switch = components.switch(
             frame, 2, 1, self.ui_state, "layer_filter_regex"
         )
+        
+        # Now create the dropdown with three-dot button (this will call the command callback)
+        _, components_dict = components.options_adv(
+            frame, 0, 1, self.presets_list, self.ui_state, "layer_filter_preset",
+            command=self.__preset_set_layer_choice,
+            adv_command=self.__open_block_lr_window
+        )
+        self.layer_selector = components_dict['component']
 
         # Let the user set their own layer filter
         if self.train_config.layer_filter and self.train_config.layer_filter_preset == "custom":
@@ -855,6 +861,19 @@ class TrainingTab:
 
     def __open_offloading_window(self):
         window = OffloadingWindow(self.master, self.train_config, self.ui_state)
+        self.master.wait_window(window)
+
+    def __open_block_lr_window(self):
+        """Open the block-wise learning rate configuration window"""
+        # Only show for Flux models
+        if not self.train_config.model_type.is_flux():
+            return
+        
+        # Only show when "blocks" preset is selected
+        if self.ui_state.get_var("layer_filter_preset").get() != "blocks":
+            return
+        
+        window = BlockLearningRateWindow(self.master, self.train_config, self.ui_state)
         self.master.wait_window(window)
 
     def __restore_optimizer_config(self, *args):

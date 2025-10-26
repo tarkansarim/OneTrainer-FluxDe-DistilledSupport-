@@ -3,7 +3,7 @@
 OneTrainer is a one-stop solution for all your Diffusion training needs.
 
 > [!NOTE]
-> **This fork adds complete support for Flux Dev Dedistilled models**, **fixes GPU selection in single-GPU mode**, **unlocks T5 token limit to 512**, and **fixes Flux Dev sampling guidance**. Includes traditional CFG during sampling, negative prompts, crash prevention, proper device index handling, extended prompt support, and proper sample quality. All changes are automatic and backward-compatible. See [Flux Dev Dedistilled Support](#flux-dev-dedistilled-support) and [Additional Improvements](#additional-improvements-in-this-fork) sections below for details.
+> **This fork adds complete support for Flux Dev Dedistilled models**, **fixes GPU selection in single-GPU mode**, **unlocks T5 token limit to 512**, **fixes Flux Dev sampling guidance**, and **adds block-wise learning rate control**. Includes traditional CFG during sampling, negative prompts, crash prevention, proper device index handling, extended prompt support, proper sample quality, and individual LR control for each Flux transformer block. All changes are automatic and backward-compatible. See [Flux Dev Dedistilled Support](#flux-dev-dedistilled-support) and [Additional Improvements](#additional-improvements-in-this-fork) sections below for details.
 
 <a href="https://discord.gg/KwgcQd5scF"><img src="https://discord.com/api/guilds/1102003518203756564/widget.png" alt="OneTrainer Discord"/></a><br>
 
@@ -138,6 +138,17 @@ Training Flux Dev Dedistilled works exactly like regular Flux Dev:
 Sample images during training will automatically use traditional CFG if your model is dedistilled.
 
 ## Additional Improvements in This Fork
+
+### Block-Wise Learning Rate Control for Flux
+
+-   ✅ **Individual Block LRs**: Set different learning rate multipliers for each Flux transformer block (19 double blocks + 38 single blocks)
+-   ✅ **GUI Interface**: Access via three-dot button (…) next to Layer Filter dropdown when "blocks" preset is selected
+-   ✅ **Slider Control**: Each block has a slider (0.0-1.0) to control its LR multiplier
+-   ✅ **Advanced Training**: Enable techniques like layer-wise LR decay, selective fine-tuning, and preservation training
+-   ✅ **LoRA & Fine-Tune**: Works with both training methods
+-   ✅ **Default Behavior**: All multipliers default to 1.0 (no change from standard training)
+
+See [BLOCK_LEARNING_RATE_FEATURE.md](BLOCK_LEARNING_RATE_FEATURE.md) for detailed documentation.
 
 ### GPU Selection Fix
 
