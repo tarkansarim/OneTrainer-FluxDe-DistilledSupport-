@@ -71,6 +71,7 @@ class RunpodCloud(LinuxCloud):
             image_name="",
             template_id="1a33vbssq9",
             gpu_type_id=config.gpu_type,
+            gpu_count=config.gpu_count,
             cloud_type=config.sub_type,
             support_public_ip=True,
             volume_in_gb=config.volume_size,
@@ -88,7 +89,7 @@ class RunpodCloud(LinuxCloud):
         runpod.stop_pod(self.config.secrets.cloud.id)
 
     def _start(self):
-        runpod.resume_pod(self.config.secrets.cloud.id,gpu_count=1)
+        runpod.resume_pod(self.config.secrets.cloud.id,gpu_count=self.config.cloud.gpu_count)
 
     def _get_action_cmd(self,action : CloudAction):
         if action == CloudAction.STOP:

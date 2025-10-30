@@ -66,6 +66,30 @@ class BaseCloud(metaclass=ABCMeta):
             if hasattr(concept.text,"local_prompt_path"):
                 self.file_sync.sync_up_file(local=Path(concept.text.local_prompt_path),remote=Path(concept.text.prompt_path))
 
+        # If training should continue from the last backup, upload the latest local backup folder as well
+        try:
+            if getattr(self.config, "continue_last_backup", False):
+                local_backups_dir = Path(self.config.local_workspace_dir, "backup")
+                if local_backups_dir.exists() and local_backups_dir.is_dir():
+                    # Find latest backup folder by lexicographic (timestamp-first) order, descending
+                    backup_dirs = sorted(
+                        [p for p in local_backups_dir.iterdir() if p.is_dir()],
+                        key=lambda p: p.name,
+                        reverse=True,
+                    )
+                    if len(backup_dirs) > 0:
+                        latest_backup = backup_dirs[0]
+                        remote_backup = Path(self.config.workspace_dir, "backup", latest_backup.name)
+                        print(f"uploading latest backup {latest_backup} -> {remote_backup}")
+                        self.file_sync.sync_up_dir(
+                            local=latest_backup,
+                            remote=remote_backup,
+                            recursive=True,
+                        )
+        except Exception:
+            # Do not fail the whole upload if backup upload fails; training can still proceed
+            pass
+
     @staticmethod
     def _filter_download(config : CloudConfig,path : Path):
         if 'samples' in path.parts:

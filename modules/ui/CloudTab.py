@@ -151,13 +151,17 @@ class CloudTab:
         _,gpu_components=components.options_adv(self.frame, 4, 5, [("")], self.ui_state, "cloud.gpu_type",adv_command=self.__set_gpu_types)
         self.gpu_types_menu=gpu_components['component']
 
-        components.label(self.frame, 5, 4, "Volume size",
-                         tooltip="Set the storage volume size in GB. This volume persists only until the cloud is deleted - not a RunPod network volume")
-        components.entry(self.frame, 5, 5, self.ui_state, "cloud.volume_size")
+        components.label(self.frame, 5, 4, "GPU count",
+                         tooltip="Number of GPUs to request for the Runpod instance")
+        components.entry(self.frame, 5, 5, self.ui_state, "cloud.gpu_count")
 
-        components.label(self.frame, 6, 4, "Min download",
+        components.label(self.frame, 6, 4, "Volume size",
+                         tooltip="Set the storage volume size in GB. This volume persists only until the cloud is deleted - not a RunPod network volume")
+        components.entry(self.frame, 6, 5, self.ui_state, "cloud.volume_size")
+
+        components.label(self.frame, 7, 4, "Min download",
                          tooltip="Set the minimum download speed of the cloud in Mbps.")
-        components.entry(self.frame, 6, 5, self.ui_state, "cloud.min_download")
+        components.entry(self.frame, 7, 5, self.ui_state, "cloud.min_download")
 
         components.label(self.frame, 8, 4, "Action on finish",
                          tooltip="What to do when training finishes and the data has been fully downloaded: Stop or delete the cloud, or do nothing.")

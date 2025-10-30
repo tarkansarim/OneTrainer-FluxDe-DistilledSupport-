@@ -39,7 +39,7 @@ from modules.util.enum.ModelType import ModelType
 from modules.util.enum.TrainingMethod import TrainingMethod
 from modules.util.torch_util import torch_gc
 from modules.util.TrainProgress import TrainProgress
-from modules.util.ui import components
+from modules.util.ui import components, dialogs
 from modules.util.ui.ui_utils import set_window_icon
 from modules.util.ui.UIState import UIState
 
@@ -183,22 +183,27 @@ class TrainUI(ctk.CTk):
         frame.grid_columnconfigure(2, weight=1)
 
 
+        # import button
+        components.button(frame, 0, 3, "import", self.import_training,
+                                             width=60, padx=5, pady=(15, 0),
+                                             tooltip="Import a config file from anywhere into training presets")
+
         # export button
-        self.export_button = components.button(frame, 0, 3, "Export", self.export_training,
+        self.export_button = components.button(frame, 0, 4, "Export", self.export_training,
                                              width=60, padx=5, pady=(15, 0),
                                              tooltip="Export the current configuration as a script to run without a UI")
 
         # debug button
-        components.button(frame, 0, 4, "Debug", self.generate_debug_package,
+        components.button(frame, 0, 5, "Debug", self.generate_debug_package,
                                        width=60, padx=(5, 25), pady=(15, 0),
                                        tooltip="Generate a zip file with config.json, debug_report.log and settings diff, use this to report bugs or issues")
 
         # tensorboard button
-        components.button(frame, 0, 5, "Tensorboard", self.open_tensorboard,
+        components.button(frame, 0, 6, "Tensorboard", self.open_tensorboard,
                                              width=100, padx=(0, 5), pady=(15, 0))
 
         # training button
-        self.training_button = components.button(frame, 0, 6, "Start Training", self.start_training,
+        self.training_button = components.button(frame, 0, 7, "Start Training", self.start_training,
                                                  padx=(5, 20), pady=(15, 0))
         self._set_training_button_style("idle")  # centralized styling
 
@@ -806,6 +811,44 @@ class TrainUI(ctk.CTk):
         self.concepts_tab.save_current_config()
         self.sampling_tab.save_current_config()
         self.additional_embeddings_tab.save_current_config()
+
+    def import_training(self):
+        import tkinter.messagebox as messagebox
+        
+        file_path = filedialog.askopenfilename(
+            title="Select Config File",
+            filetypes=[("JSON Files", "*.json"), ("All Files", "*.*")]
+        )
+        
+        if file_path:
+            try:
+                # Load the config
+                with open(file_path, "r") as f:
+                    loaded_dict = json.load(f)
+                
+                # Create default config and load from dict
+                default_config = TrainConfig.default_values()
+                loaded_config = default_config.from_dict(loaded_dict).to_unpacked_config()
+                
+                # Load secrets if available
+                with suppress(FileNotFoundError), open("secrets.json", "r") as f:
+                    secrets_dict = json.load(f)
+                    from modules.util.config.SecretsConfig import SecretsConfig
+                    loaded_config.secrets = SecretsConfig.default_values().from_dict(secrets_dict)
+                
+                # Update the train_config with loaded values
+                self.train_config.from_dict(loaded_config.to_dict())
+                self.ui_state.update(loaded_config)
+                
+                # Update optimizer
+                from modules.util.optimizer_util import change_optimizer
+                optimizer_config = change_optimizer(self.train_config)
+                self.ui_state.get_var("optimizer").update(optimizer_config)
+                
+                messagebox.showinfo("Import Successful", "Config loaded successfully!")
+                
+            except Exception as e:
+                messagebox.showerror("Import Error", f"Failed to import config:\n{str(e)}")
 
     def export_training(self):
         file_path = filedialog.asksaveasfilename(filetypes=[

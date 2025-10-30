@@ -37,6 +37,7 @@ class CloudConfig(BaseConfig):
     tensorboard_tunnel: bool
     sub_type: str
     gpu_type: str
+    gpu_count: int
     volume_size: int
     min_download: int
     remote_dir: str
@@ -73,6 +74,7 @@ class CloudConfig(BaseConfig):
         data.append(("tensorboard_tunnel", True, bool, False))
         data.append(("sub_type", "", str, False))
         data.append(("gpu_type", "", str, False))
+        data.append(("gpu_count", 1, int, False))
         data.append(("volume_size", 100, int, False))
         data.append(("min_download", 0, int, False))
         data.append(("remote_dir", "/workspace", str, False))

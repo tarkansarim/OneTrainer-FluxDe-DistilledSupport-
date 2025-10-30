@@ -31,6 +31,7 @@ from mgds.pipelineModules.RandomContrast import RandomContrast
 from mgds.pipelineModules.RandomFlip import RandomFlip
 from mgds.pipelineModules.RandomHue import RandomHue
 from mgds.pipelineModules.RandomLatentMaskRemove import RandomLatentMaskRemove
+from mgds.pipelineModules.RandomNoise import RandomNoise
 from mgds.pipelineModules.RandomMaskRotateCrop import RandomMaskRotateCrop
 from mgds.pipelineModules.RandomRotate import RandomRotate
 from mgds.pipelineModules.RandomSaturation import RandomSaturation
@@ -219,6 +220,7 @@ class DataLoaderText2ImageMixin:
         random_contrast = RandomContrast(names=image_inputs, enabled_in_name='concept.image.enable_random_contrast', fixed_enabled_in_name='concept.image.enable_fixed_contrast', max_strength_in_name='concept.image.random_contrast_max_strength')
         random_saturation = RandomSaturation(names=image_inputs, enabled_in_name='concept.image.enable_random_saturation', fixed_enabled_in_name='concept.image.enable_fixed_saturation', max_strength_in_name='concept.image.random_saturation_max_strength')
         random_hue = RandomHue(names=image_inputs, enabled_in_name='concept.image.enable_random_hue', fixed_enabled_in_name='concept.image.enable_fixed_hue', max_strength_in_name='concept.image.random_hue_max_strength')
+        random_noise = RandomNoise(names=image_inputs, enabled_in_name='concept.image.enable_random_noise', fixed_enabled_in_name='concept.image.enable_fixed_noise', max_strength_in_name='concept.image.random_noise_max_strength', min_strength_in_name='concept.image.random_noise_min_strength')
 
         # text augmentations
         drop_tags = DropTags(text_in_name='prompt', enabled_in_name='concept.text.tag_dropout_enable', probability_in_name='concept.text.tag_dropout_probability', dropout_mode_in_name='concept.text.tag_dropout_mode',
@@ -235,6 +237,7 @@ class DataLoaderText2ImageMixin:
             random_contrast,
             random_saturation,
             random_hue,
+            random_noise,
             drop_tags,
             caps_randomize,
             shuffle_tags,

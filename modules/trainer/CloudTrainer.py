@@ -88,7 +88,7 @@ class CloudTrainer(BaseTrainer):
         self.sync_thread.start()
 
         if self.config.continue_last_backup:
-            print('warning: backups are not uploaded, but expected to be on the cloud already!')
+            print('info: latest backup will be uploaded before starting training (if found).')
 
     def train(self):
         try:
