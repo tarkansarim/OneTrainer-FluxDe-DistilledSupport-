@@ -71,6 +71,10 @@ class MultiTrainer(BaseTrainer):
             raise
         finally:
             trainer.end()
+            # Synchronize all ranks before destroying process group to prevent deadlock
+            # where rank 0 tears down TCPStore while other ranks are still using it
+            if torch.distributed.is_initialized():
+                torch.distributed.barrier()
             torch.distributed.destroy_process_group()
 
     def train(self):
