@@ -1658,9 +1658,10 @@ def _restore_local_paths(config: TrainConfig):
         restore(add_embedding, "model_name")
     
     # Restore concept paths
-    for concept in config.concepts:
-        restore(concept, "path")
-        restore(concept.text, "prompt_path")
+    if config.concepts is not None:
+        for concept in config.concepts:
+            restore(concept, "path")
+            restore(concept.text, "prompt_path")
 
 
 def create_trainer(
