@@ -262,16 +262,16 @@ class GenericTrainer(BaseTrainer):
                     shutil.rmtree(path)
 
     def __prune_backups(self, backups_to_keep: int):
-        backup_dirpath = os.path.join(self.config.workspace_dir, "backup")
-        if os.path.exists(backup_dirpath):
+        backup_dirpath = Path(self.config.workspace_dir) / "backup"
+        if backup_dirpath.exists():
             backup_directories = sorted(
-                [dirpath for dirpath in os.listdir(backup_dirpath) if
-                 os.path.isdir(os.path.join(backup_dirpath, dirpath))],
+                [dirpath for dirpath in backup_dirpath.iterdir() if
+                 dirpath.is_dir()],
+                key=lambda p: p.name,
                 reverse=True,
             )
 
             for dirpath in backup_directories[backups_to_keep:]:
-                dirpath = os.path.join(backup_dirpath, dirpath)
                 try:
                     shutil.rmtree(dirpath)
                 except Exception:
@@ -499,12 +499,14 @@ class GenericTrainer(BaseTrainer):
                                             train_progress.global_step)
 
     def __save_backup_config(self, backup_path):
-        config_path = os.path.join(backup_path, "onetrainer_config")
-        args_path = path_util.canonical_join(config_path, "args.json")
-        concepts_path = path_util.canonical_join(config_path, "concepts.json")
-        samples_path = path_util.canonical_join(config_path, "samples.json")
+        # Convert to Path if it's a string to ensure proper path handling
+        backup_path = Path(backup_path)
+        config_path = backup_path / "onetrainer_config"
+        args_path = path_util.canonical_join(str(config_path), "args.json")
+        concepts_path = path_util.canonical_join(str(config_path), "concepts.json")
+        samples_path = path_util.canonical_join(str(config_path), "samples.json")
 
-        os.makedirs(Path(config_path).absolute(), exist_ok=True)
+        os.makedirs(config_path.absolute(), exist_ok=True)
 
         with open(args_path, "w") as f:
             json.dump(self.config.to_settings_dict(secrets=False), f, indent=4)
@@ -519,7 +521,10 @@ class GenericTrainer(BaseTrainer):
         self.callbacks.on_update_status("Creating backup")
 
         backup_name = f"{get_string_timestamp()}-backup-{train_progress.filename_string()}"
-        backup_path = os.path.join(self.config.workspace_dir, "backup", backup_name)
+        # Use Path to ensure proper cross-platform path handling
+        # This prevents mixing Windows backslashes with Linux forward slashes
+        backup_path = Path(self.config.workspace_dir) / "backup" / backup_name
+        backup_path_str = str(backup_path)
 
         # Special case for schedule-free optimizers.
         if self.config.optimizer.optimizer.is_schedule_free:
@@ -528,22 +533,22 @@ class GenericTrainer(BaseTrainer):
 
         try:
             if print_msg:
-                print_cb("Creating Backup " + backup_path)
+                print_cb("Creating Backup " + backup_path_str)
 
             self.model_saver.save(
                 self.model,
                 self.config.model_type,
                 ModelFormat.INTERNAL,
-                backup_path,
+                backup_path_str,
                 None,
             )
 
-            self.__save_backup_config(backup_path)
+            self.__save_backup_config(backup_path_str)
         except Exception:
             traceback.print_exc()
             print("Could not save backup. Check your disk space!")
             try:
-                if os.path.isdir(backup_path):
+                if backup_path.exists() and backup_path.is_dir():
                     shutil.rmtree(backup_path)
             except Exception:
                 traceback.print_exc()

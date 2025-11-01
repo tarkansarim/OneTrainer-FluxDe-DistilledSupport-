@@ -2,6 +2,7 @@ import json
 import os
 import uuid
 from copy import deepcopy
+from pathlib import Path
 from typing import Any
 
 from modules.util.config.BaseConfig import BaseConfig
@@ -772,17 +773,18 @@ class TrainConfig(BaseConfig):
             return self.additional_embeddings
 
     def get_last_backup_path(self) -> str | None:
-        backups_path = os.path.join(self.workspace_dir, "backup")
-        if os.path.exists(backups_path):
+        # Use Path to ensure proper cross-platform path handling
+        # This prevents mixing Windows backslashes with Linux forward slashes
+        backups_path = Path(self.workspace_dir) / "backup"
+        if backups_path.exists():
             backup_paths = sorted(
-                [path for path in os.listdir(backups_path) if
-                 os.path.isdir(os.path.join(backups_path, path))],
+                [path for path in backups_path.iterdir() if path.is_dir()],
+                key=lambda p: p.name,
                 reverse=True,
             )
 
             if backup_paths:
-                last_backup_path = backup_paths[0]
-                return os.path.join(backups_path, last_backup_path)
+                return str(backup_paths[0])
 
         return None
 
