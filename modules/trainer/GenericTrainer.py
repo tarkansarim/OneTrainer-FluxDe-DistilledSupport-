@@ -4,6 +4,7 @@ import json
 import os
 import random
 import shutil
+import sys
 import traceback
 from collections.abc import Callable
 from pathlib import Path
@@ -147,9 +148,54 @@ class GenericTrainer(BaseTrainer):
         self.model_setup.setup_optimizations(self.model, self.config)
         self.model_setup.setup_train_device(self.model, self.config)
         self.model_setup.setup_model(self.model, self.config)
-        self.model.to(self.temp_device)
-        self.model.eval()
-        torch_gc()
+        
+        # Debug: Print after layer selection to track progress
+        if multi.is_enabled():
+            print(f"[Rank {multi.rank()}] Layer selection completed, moving model to temp device...")
+            sys.stdout.flush()  # Ensure output is visible
+        else:
+            print("Layer selection completed, moving model to temp device...")
+            sys.stdout.flush()
+        
+        try:
+            self.model.to(self.temp_device)
+            if multi.is_enabled():
+                print(f"[Rank {multi.rank()}] Model moved to temp device, setting eval mode...")
+                sys.stdout.flush()
+            else:
+                print("Model moved to temp device, setting eval mode...")
+        except Exception as e:
+            if multi.is_enabled():
+                print(f"[Rank {multi.rank()}] ERROR moving model to temp device: {e}")
+                sys.stdout.flush()
+            else:
+                print(f"ERROR moving model to temp device: {e}")
+            raise
+        
+        try:
+            self.model.eval()
+            if multi.is_enabled():
+                print(f"[Rank {multi.rank()}] Eval mode set, running torch_gc...")
+                sys.stdout.flush()
+            else:
+                print("Eval mode set, running torch_gc...")
+        except Exception as e:
+            if multi.is_enabled():
+                print(f"[Rank {multi.rank()}] ERROR setting eval mode: {e}")
+                sys.stdout.flush()
+            else:
+                print(f"ERROR setting eval mode: {e}")
+            raise
+        
+        try:
+            torch_gc()
+        except Exception as e:
+            if multi.is_enabled():
+                print(f"[Rank {multi.rank()}] ERROR in torch_gc: {e}")
+                sys.stdout.flush()
+            else:
+                print(f"ERROR in torch_gc: {e}")
+            raise
         
         # Debug: Print after model setup to track progress
         if multi.is_enabled():
