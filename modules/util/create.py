@@ -1643,9 +1643,8 @@ def _restore_local_paths(config: TrainConfig):
                 setattr(config_obj, attribute, default_value)
     
     # Restore top-level paths with defaults
-    # Default workspace_dir is "workspace/run" per TrainConfig.default_values()
-    restore(config, "workspace_dir", "workspace/run")
-    restore(config, "debug_dir", "debug")
+    restore(config, "workspace_dir")
+    restore(config, "debug_dir")
     # Force reset cache_dir if it looks remote (no default, will be empty if no local_cache_dir)
     cache_dir = getattr(config, "cache_dir", "")
     if is_remote_path(cache_dir):
