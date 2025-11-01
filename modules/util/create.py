@@ -1340,7 +1340,15 @@ def create_ema(
     )
 
     if state_dict is not None:
-        ema.load_state_dict(state_dict)
+        # Validate EMA state dict matches current parameters
+        # This can fail if model structure changed (layer filters, device_indexes, etc.)
+        if not ema.load_state_dict(state_dict, current_parameters=parameters):
+            print("Warning: Could not load EMA state from backup: parameter shapes don't match")
+            print("Continuing training with fresh EMA state...")
+            if hasattr(torch.distributed, 'is_initialized') and torch.distributed.is_initialized():
+                import modules.util.multi_gpu_util as multi
+                if multi.is_enabled():
+                    print(f"[Rank {multi.rank()}] EMA state will be reinitialized")
 
     return ema
 

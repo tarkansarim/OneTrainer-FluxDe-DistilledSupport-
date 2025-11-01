@@ -74,10 +74,35 @@ class EMAModuleWrapper:
 
         self.temp_stored_parameters = None
 
-    def load_state_dict(self, state_dict: dict) -> None:
+    def load_state_dict(self, state_dict: dict, current_parameters: Iterable[torch.nn.Parameter] = None) -> bool:
+        """
+        Load EMA state dict.
+        
+        Args:
+            state_dict: The state dict to load
+            current_parameters: Current model parameters to validate against
+            
+        Returns:
+            True if loaded successfully, False if validation failed
+        """
+        saved_ema_params = state_dict.get("ema_parameters")
+        if saved_ema_params is None:
+            return False
+        
+        # Validate that saved EMA parameters match current parameters if provided
+        if current_parameters is not None:
+            current_params_list = list(current_parameters)
+            if len(saved_ema_params) != len(current_params_list):
+                return False
+            
+            for saved_param, current_param in zip(saved_ema_params, current_params_list):
+                if saved_param.shape != current_param.shape:
+                    return False
+        
         self.decay = self.decay if self.decay else state_dict.get("decay", self.decay)
-        self.ema_parameters = state_dict.get("ema_parameters")
+        self.ema_parameters = saved_ema_params
         self.to(self.device)
+        return True
 
     def state_dict(self) -> dict:
         return {
