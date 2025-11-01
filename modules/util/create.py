@@ -1626,19 +1626,19 @@ def _restore_local_paths(config: TrainConfig):
                 path.startswith("/tmp") or
                 (path.startswith("/") and "workspace" in path_lower))
     
-    def restore(config_obj, attribute: str, default_value: str = None):
+    def restore(config_obj, attribute: str, default_value: str = None, force: bool = False):
         local_attr = "local_" + attribute
         current_value = getattr(config_obj, attribute, "")
         
         # First try to restore from local_* attribute
         if hasattr(config_obj, local_attr):
             local_value = getattr(config_obj, local_attr)
-            if local_value:
+            if local_value and not is_remote_path(local_value):
                 setattr(config_obj, attribute, local_value)
                 return
         
-        # If no local_* attribute and current path looks remote, reset to default
-        if is_remote_path(current_value):
+        # If force is True, or if no local_* attribute and current path looks remote, reset to default
+        if force or (default_value is not None and is_remote_path(current_value)):
             if default_value is not None:
                 setattr(config_obj, attribute, default_value)
     
@@ -1647,7 +1647,8 @@ def _restore_local_paths(config: TrainConfig):
     restore(config, "debug_dir")
     restore(config, "cache_dir")
     restore(config, "base_model_name")
-    restore(config, "output_model_destination", "models/model.safetensors")
+    # Always reset output_model_destination to models/lora.safetensors when cloud is disabled
+    restore(config, "output_model_destination", "models/lora.safetensors", force=True)
     restore(config, "lora_model_name", "models/lora.safetensors")
     
     # Restore nested paths
