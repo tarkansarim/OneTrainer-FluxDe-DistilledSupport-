@@ -579,28 +579,36 @@ class LoRAModuleWrapper:
         Hooks the LoRA into the module without changing its weights
         """
         for module in self.lora_modules.values():
-            module.hook_to_module()
+            # Skip dummy modules - they should never have hooks applied
+            if not isinstance(module, self.dummy_klass):
+                module.hook_to_module()
 
     def remove_hook_from_module(self):
         """
         Removes the LoRA hook from the module without changing its weights
         """
         for module in self.lora_modules.values():
-            module.remove_hook_from_module()
+            # Skip dummy modules - they should never have hooks applied
+            if not isinstance(module, self.dummy_klass):
+                module.remove_hook_from_module()
 
     def apply_to_module(self):
         """
         Applys the LoRA to the module, changing its weights
         """
         for module in self.lora_modules.values():
-            module.apply_to_module()
+            # Skip dummy modules - they should never be applied
+            if not isinstance(module, self.dummy_klass):
+                module.apply_to_module()
 
     def extract_from_module(self, base_module: nn.Module):
         """
         Creates a LoRA from the difference between the base_module and the orig_module
         """
         for module in self.lora_modules.values():
-            module.extract_from_module(base_module)
+            # Skip dummy modules - they should never be extracted
+            if not isinstance(module, self.dummy_klass):
+                module.extract_from_module(base_module)
 
     def prune(self):
         """
@@ -615,4 +623,6 @@ class LoRAModuleWrapper:
         if dropout_probability < 0 or dropout_probability > 1:
             raise ValueError("Dropout probability must be in [0, 1]")
         for module in self.lora_modules.values():
-            module.dropout.p = dropout_probability
+            # Skip dummy modules - they don't use dropout
+            if not isinstance(module, self.dummy_klass):
+                module.dropout.p = dropout_probability
