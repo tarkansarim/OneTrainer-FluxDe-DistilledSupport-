@@ -180,7 +180,13 @@ class PeftBase(nn.Module):
             def load_state_dict(self, state_dict: Mapping[str, Any],
                                 strict: bool = True, assign: bool = False):
                 self._initialized = True
-                self._state_dict = copy.deepcopy(state_dict)
+                # Use shallow copy instead of deep copy to avoid memory exhaustion
+                # Dummy modules are placeholders and don't need separate tensor copies
+                # They just need references for state_dict() to return later
+                if isinstance(state_dict, dict):
+                    self._state_dict = state_dict.copy()
+                else:
+                    self._state_dict = dict(state_dict)
                 # noinspection PyProtectedMember
                 return nn.modules.module._IncompatibleKeys([], [])
 
