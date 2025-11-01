@@ -150,15 +150,31 @@ class GenericTrainer(BaseTrainer):
         self.model.to(self.temp_device)
         self.model.eval()
         torch_gc()
+        
+        # Debug: Print after model setup to track progress
+        if multi.is_enabled():
+            print(f"[Rank {multi.rank()}] Model setup completed, moving to data loader creation...")
+        else:
+            print("Model setup completed, moving to data loader creation...")
 
         self.callbacks.on_update_status("creating the data loader/caching")
+        
+        # Debug: Print to console to track progress (important for cloud training)
+        if multi.is_enabled():
+            print(f"[Rank {multi.rank()}] Starting data loader creation (master-first)...")
+        else:
+            print("Starting data loader creation...")
 
         # In multi-GPU training, create data loader master-first to avoid deadlocks
         # during dataset initialization when multiple processes access shared resources
         for _ in multi.master_first():
+            if multi.is_enabled():
+                print(f"[Rank {multi.rank()}] Creating data loader (inside master_first context)...")
             self.data_loader = self.create_data_loader(
                 self.model, self.model.train_progress
             )
+            if multi.is_enabled():
+                print(f"[Rank {multi.rank()}] Data loader created successfully")
         
         self.model_saver = self.create_model_saver()
 
