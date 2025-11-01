@@ -1643,20 +1643,28 @@ def _restore_local_paths(config: TrainConfig):
                 setattr(config_obj, attribute, default_value)
     
     # Restore top-level paths with defaults
-    restore(config, "workspace_dir")
-    restore(config, "debug_dir")
-    # Force reset cache_dir if it looks remote (no default, will be empty if no local_cache_dir)
+    # Force reset workspace_dir if it looks remote (just like output_model_destination)
+    workspace_dir = getattr(config, "workspace_dir", "")
+    if is_remote_path(workspace_dir):
+        if hasattr(config, "local_workspace_dir") and config.local_workspace_dir:
+            config.workspace_dir = config.local_workspace_dir
+        else:
+            # Reset to default local workspace
+            config.workspace_dir = "workspace/run"
+    
+    # Force reset cache_dir if it looks remote
     cache_dir = getattr(config, "cache_dir", "")
     if is_remote_path(cache_dir):
         if hasattr(config, "local_cache_dir") and config.local_cache_dir:
             config.cache_dir = config.local_cache_dir
         else:
-            # Derive from workspace_dir if available
-            workspace_dir = getattr(config, "workspace_dir", "")
-            if workspace_dir and not is_remote_path(workspace_dir):
-                config.cache_dir = str(Path(workspace_dir).parent / f"{Path(workspace_dir).name}-cache")
+            # Derive from workspace_dir (which we just fixed above)
+            if config.workspace_dir and not is_remote_path(config.workspace_dir):
+                config.cache_dir = str(Path(config.workspace_dir).parent / f"{Path(config.workspace_dir).name}-cache")
             else:
-                config.cache_dir = ""
+                config.cache_dir = "workspace-cache/run"
+    
+    restore(config, "debug_dir", "debug")
     restore(config, "base_model_name")
     # Always reset output_model_destination to models/lora.safetensors when cloud is disabled
     restore(config, "output_model_destination", "models/lora.safetensors", force=True)
