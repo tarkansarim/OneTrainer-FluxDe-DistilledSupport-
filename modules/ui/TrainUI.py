@@ -792,6 +792,21 @@ class TrainUI(ctk.CTk):
     def start_training(self):
         if self.training_thread is None:
             self.save_default()
+            
+            # Reset paths immediately when cloud is disabled, before training starts
+            if not self.train_config.cloud.enabled:
+                from modules.util import create
+                create._restore_local_paths(self.train_config)
+                # Update UI state to reflect the reset paths
+                if hasattr(self.train_config, "output_model_destination"):
+                    self.ui_state.get_var("output_model_destination").set(self.train_config.output_model_destination)
+                if hasattr(self.train_config, "cache_dir"):
+                    self.ui_state.get_var("cache_dir").set(self.train_config.cache_dir)
+                if hasattr(self.train_config, "workspace_dir"):
+                    self.ui_state.get_var("workspace_dir").set(self.train_config.workspace_dir)
+                if hasattr(self.train_config, "lora_model_name"):
+                    self.ui_state.get_var("lora_model_name").set(self.train_config.lora_model_name)
+            
             self._set_training_button_running()
 
             if self.train_config.tensorboard and not self.train_config.tensorboard_always_on and self.always_on_tensorboard_subprocess:

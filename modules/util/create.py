@@ -1645,7 +1645,18 @@ def _restore_local_paths(config: TrainConfig):
     # Restore top-level paths with defaults
     restore(config, "workspace_dir")
     restore(config, "debug_dir")
-    restore(config, "cache_dir")
+    # Force reset cache_dir if it looks remote (no default, will be empty if no local_cache_dir)
+    cache_dir = getattr(config, "cache_dir", "")
+    if is_remote_path(cache_dir):
+        if hasattr(config, "local_cache_dir") and config.local_cache_dir:
+            config.cache_dir = config.local_cache_dir
+        else:
+            # Derive from workspace_dir if available
+            workspace_dir = getattr(config, "workspace_dir", "")
+            if workspace_dir and not is_remote_path(workspace_dir):
+                config.cache_dir = str(Path(workspace_dir).parent / f"{Path(workspace_dir).name}-cache")
+            else:
+                config.cache_dir = ""
     restore(config, "base_model_name")
     # Always reset output_model_destination to models/lora.safetensors when cloud is disabled
     restore(config, "output_model_destination", "models/lora.safetensors", force=True)
