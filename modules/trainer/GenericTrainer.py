@@ -2,11 +2,13 @@ import contextlib
 import copy
 import json
 import os
+import random
 import shutil
 import traceback
 from collections.abc import Callable
 from pathlib import Path
 
+import numpy as np
 import modules.util.multi_gpu_util as multi
 from modules.dataLoader.BaseDataLoader import BaseDataLoader
 from modules.model.BaseModel import BaseModel
@@ -78,6 +80,15 @@ class GenericTrainer(BaseTrainer):
         self.grad_hook_handles = []
 
     def start(self):
+        # Set deterministic seeds for reproducible results, especially for sampling
+        # Use a fixed seed (42) to ensure consistent samples across runs and environments
+        seed = 42
+        random.seed(seed)
+        np.random.seed(seed)
+        torch.manual_seed(seed)
+        torch.cuda.manual_seed_all(seed)
+        # Note: We don't set cudnn.deterministic=True as it can hurt performance
+        
         if multi.is_master():
             self.__save_config_to_workspace()
 
@@ -271,6 +282,11 @@ class GenericTrainer(BaseTrainer):
             train_device: torch.device,
             sample_params_list: list[SampleConfig] = None,
     ):
+        # In multi-GPU training, only sample on master rank to ensure consistent results
+        # (EMA sampling is already master-only, but non-EMA was running on all GPUs)
+        if multi.is_enabled() and not multi.is_master():
+            return
+
         # Special case for schedule-free optimizers.
         if self.config.optimizer.optimizer.is_schedule_free:
             torch.clear_autocast_cache()
@@ -299,7 +315,7 @@ class GenericTrainer(BaseTrainer):
 
         if self.model.ema:
             #the EMA model only exists in the master process, so EMA sampling is done on one GPU only
-            #non-EMA sampling is done on all GPUs
+            #non-EMA sampling is also restricted to master rank (see early return above)
             assert multi.is_master() and self.config.ema != EMAMode.OFF
             self.model.ema.copy_ema_to(self.parameters, store_temp=True)
 

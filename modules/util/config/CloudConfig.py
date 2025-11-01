@@ -36,6 +36,8 @@ class CloudConfig(BaseConfig):
     name: str
     tensorboard_tunnel: bool
     sub_type: str
+    multi_gpu: bool
+    device_indexes: str
     gpu_type: str
     gpu_count: int
     volume_size: int
@@ -73,6 +75,8 @@ class CloudConfig(BaseConfig):
         data.append(("name", "OneTrainer", str, False))
         data.append(("tensorboard_tunnel", True, bool, False))
         data.append(("sub_type", "", str, False))
+        data.append(("multi_gpu", False, bool, False))
+        data.append(("device_indexes", "", str, False))
         data.append(("gpu_type", "", str, False))
         data.append(("gpu_count", 1, int, False))
         data.append(("volume_size", 100, int, False))

@@ -144,52 +144,118 @@ class CloudTab:
             ("Secure", "SECURE"),
         ], self.ui_state, "cloud.sub_type")
 
-
-        components.label(self.frame, 4, 4, "GPU",
-                         tooltip="Select the GPU type. Enter an API key before pressing the button.")
-
-        _,gpu_components=components.options_adv(self.frame, 4, 5, [("")], self.ui_state, "cloud.gpu_type",adv_command=self.__set_gpu_types)
-        self.gpu_types_menu=gpu_components['component']
+        components.label(self.frame, 4, 4, "Multi-GPU",
+                         tooltip="Enable multi-GPU training on the cloud instance.")
+        components.switch(self.frame, 4, 5, self.ui_state, "cloud.multi_gpu")
 
         components.label(self.frame, 5, 4, "GPU count",
-                         tooltip="Number of GPUs to request for the Runpod instance")
-        components.entry(self.frame, 5, 5, self.ui_state, "cloud.gpu_count")
+                         tooltip="Number of GPUs to request for the Runpod instance. Enable Multi-GPU above to use multiple GPUs for training.")
+        self.gpu_count_entry = components.entry(
+            self.frame, 5, 5, self.ui_state, "cloud.gpu_count",
+            tooltip="Number of GPUs to request. Enable Multi-GPU above first to use multiple GPUs for training."
+        )
 
-        components.label(self.frame, 6, 4, "Volume size",
+        components.label(self.frame, 6, 4, "Device Indexes",
+                         tooltip="A comma-separated list of device indexes (e.g., \"0,1,2,3\"). If empty, all available GPUs are used. Only used when Multi-GPU is enabled.")
+        components.entry(self.frame, 6, 5, self.ui_state, "cloud.device_indexes")
+
+        components.label(self.frame, 7, 4, "GPU",
+                         tooltip="Select the GPU type. Enter an API key before pressing the button.")
+
+        _,gpu_components=components.options_adv(self.frame, 7, 5, [("")], self.ui_state, "cloud.gpu_type",adv_command=self.__set_gpu_types)
+        self.gpu_types_menu=gpu_components['component']
+        
+        # Store original colors for re-enabling
+        try:
+            self.gpu_count_entry_normal_fg = self.gpu_count_entry.cget("fg_color")
+            self.gpu_count_entry_normal_text = self.gpu_count_entry.cget("text_color")
+        except Exception:
+            self.gpu_count_entry_normal_fg = None
+            self.gpu_count_entry_normal_text = None
+        
+        # Enable/disable GPU count field based on cloud.multi_gpu setting
+        # Also sync gpu_count with cloud.device_indexes when multi-GPU is enabled
+        def update_gpu_count_state(*_):
+            multi_gpu_enabled = self.ui_state.get_var("cloud.multi_gpu").get()
+            gpu_count_var = self.ui_state.get_var("cloud.gpu_count")
+            device_indexes_var = self.ui_state.get_var("cloud.device_indexes")
+            
+            if multi_gpu_enabled:
+                self.gpu_count_entry.configure(state="normal")
+                # Restore normal colors when enabled
+                if self.gpu_count_entry_normal_fg:
+                    self.gpu_count_entry.configure(fg_color=self.gpu_count_entry_normal_fg)
+                if self.gpu_count_entry_normal_text:
+                    self.gpu_count_entry.configure(text_color=self.gpu_count_entry_normal_text)
+                
+                # Sync gpu_count with device_indexes if device_indexes is specified
+                device_indexes_str = device_indexes_var.get() or ""
+                device_indexes_str = device_indexes_str.strip()
+                if device_indexes_str:
+                    # Parse device indexes and set gpu_count to match
+                    try:
+                        device_list = [d.strip() for d in device_indexes_str.split(",") if d.strip()]
+                        if device_list:
+                            gpu_count_var.set(str(len(device_list)))
+                    except Exception:
+                        pass  # If parsing fails, leave gpu_count as-is
+                # If device_indexes is empty, gpu_count stays as user set (for "use all GPUs")
+            else:
+                self.gpu_count_entry.configure(state="disabled")
+                # Make it visually grayed out
+                self.gpu_count_entry.configure(fg_color="#2b2b2b")
+                self.gpu_count_entry.configure(text_color="#7f7f7f")
+                # Reset GPU count to 1 if multi-GPU is disabled
+                try:
+                    current_count = int(gpu_count_var.get() or "1")
+                    if current_count > 1:
+                        gpu_count_var.set("1")
+                except (ValueError, TypeError):
+                    gpu_count_var.set("1")
+        
+        # Set initial state
+        update_gpu_count_state()
+        # Watch for changes to cloud.multi_gpu and cloud.device_indexes
+        # Access the nested UIState first to ensure it's initialized
+        cloud_ui_state = self.ui_state.get_var("cloud")
+        cloud_ui_state.add_var_trace("multi_gpu", update_gpu_count_state)
+        cloud_ui_state.add_var_trace("device_indexes", update_gpu_count_state)
+
+        components.label(self.frame, 8, 4, "Volume size",
                          tooltip="Set the storage volume size in GB. This volume persists only until the cloud is deleted - not a RunPod network volume")
-        components.entry(self.frame, 6, 5, self.ui_state, "cloud.volume_size")
+        components.entry(self.frame, 8, 5, self.ui_state, "cloud.volume_size")
 
-        components.label(self.frame, 7, 4, "Min download",
+        components.label(self.frame, 9, 4, "Min download",
                          tooltip="Set the minimum download speed of the cloud in Mbps.")
-        components.entry(self.frame, 7, 5, self.ui_state, "cloud.min_download")
+        components.entry(self.frame, 9, 5, self.ui_state, "cloud.min_download")
 
-        components.label(self.frame, 8, 4, "Action on finish",
+        components.label(self.frame, 10, 4, "Action on finish",
                          tooltip="What to do when training finishes and the data has been fully downloaded: Stop or delete the cloud, or do nothing.")
-        components.options_kv(self.frame, 8, 5, [
+        components.options_kv(self.frame, 10, 5, [
             ("None", CloudAction.NONE),
             ("Stop", CloudAction.STOP),
             ("Delete", CloudAction.DELETE),
         ], self.ui_state, "cloud.on_finish")
 
-        components.label(self.frame, 9, 4, "Action on error",
+        components.label(self.frame, 11, 4, "Action on error",
                          tooltip="What to do if training stops due to an error: Stop or delete the cloud, or do nothing. Data may be lost.")
-        components.options_kv(self.frame, 9, 5, [
+        components.options_kv(self.frame, 11, 5, [
             ("None", CloudAction.NONE),
             ("Stop", CloudAction.STOP),
             ("Delete", CloudAction.DELETE),
         ], self.ui_state, "cloud.on_error")
 
-        components.label(self.frame, 10, 4, "Action on detached finish",
+        components.label(self.frame, 12, 4, "Action on detached finish",
                          tooltip="What to do when training finishes, but the client has been detached and cannot download data. Data may be lost.")
-        components.options_kv(self.frame, 10, 5, [
+        components.options_kv(self.frame, 12, 5, [
             ("None", CloudAction.NONE),
             ("Stop", CloudAction.STOP),
             ("Delete", CloudAction.DELETE),
         ], self.ui_state, "cloud.on_detached_finish")
 
-        components.label(self.frame, 11, 4, "Action on detached error",
+        components.label(self.frame, 13, 4, "Action on detached error",
                          tooltip="What to if training stops due to an error, but the client has been detached and cannot download data. Data may be lost.")
-        components.options_kv(self.frame, 11, 5, [
+        components.options_kv(self.frame, 13, 5, [
             ("None", CloudAction.NONE),
             ("Stop", CloudAction.STOP),
             ("Delete", CloudAction.DELETE),

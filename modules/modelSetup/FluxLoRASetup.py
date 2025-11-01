@@ -50,7 +50,7 @@ class FluxLoRASetup(
                 )
 
         # Transformer: Check if block-wise LRs are enabled
-        if config.block_learning_rate_multiplier and config.layer_filter_preset == "blocks":
+        if config.block_learning_rate_multiplier and config.layer_filter_preset in ["blocks", "attn-only", "attn-mlp"]:
             self._create_block_wise_parameters(
                 parameter_group_collection,
                 model.transformer_lora,

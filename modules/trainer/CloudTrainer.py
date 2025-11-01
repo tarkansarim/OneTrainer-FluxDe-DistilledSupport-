@@ -51,6 +51,10 @@ class CloudTrainer(BaseTrainer):
                     raise ValueError(f"a detached trainer with id {self.config.cloud.run_id} is still running. Use \"Reattach now\" to reattach to this trainer!")
                 self.callbacks.on_update_status("uploading config")
                 self.cloud.upload_config(self.commands)
+                
+                # Warn if multi-GPU is enabled on cloud
+                if self.remote_config.multi_gpu:
+                    print("Info: Multi-GPU training is enabled on cloud. Sampling will run only on master rank for consistency.")
         except:
             self.error_caught=True
             raise
@@ -146,6 +150,10 @@ class CloudTrainer(BaseTrainer):
         #share cloud config, so UI can be updated to IP, port, cloudid:
         remote.cloud = local.cloud
         remote.secrets.cloud = local.secrets.cloud
+        # Override multi_gpu and device_indexes with cloud-specific settings
+        # Cloud tab has its own Multi-GPU settings independent of General tab
+        remote.multi_gpu = local.cloud.multi_gpu
+        remote.device_indexes = local.cloud.device_indexes
 
         def adjust(config, attribute: str, if_exists: bool=False):
             path=getattr(config,attribute)

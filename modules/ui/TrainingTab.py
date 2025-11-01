@@ -869,8 +869,9 @@ class TrainingTab:
         if not self.train_config.model_type.is_flux():
             return
         
-        # Only show when "blocks" preset is selected
-        if self.ui_state.get_var("layer_filter_preset").get() != "blocks":
+        # Allow block-wise control for blocks, attn-only, and attn-mlp presets
+        preset = self.ui_state.get_var("layer_filter_preset").get()
+        if preset not in ["blocks", "attn-only", "attn-mlp"]:
             return
         
         window = BlockLearningRateWindow(self.master, self.train_config, self.ui_state)
