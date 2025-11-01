@@ -1606,12 +1606,54 @@ def create_noise_scheduler(
 
     return scheduler
 
+def _restore_local_paths(config: TrainConfig):
+    """
+    Restore local paths from local_* attributes when cloud is disabled.
+    This ensures that paths are reset to local values after cloud training.
+    """
+    if config.cloud.enabled:
+        # Don't restore if cloud is still enabled
+        return
+    
+    def restore(config_obj, attribute: str):
+        local_attr = "local_" + attribute
+        if hasattr(config_obj, local_attr):
+            local_value = getattr(config_obj, local_attr)
+            if local_value:
+                setattr(config_obj, attribute, local_value)
+                # Optionally clear the local_ attribute to avoid confusion
+                # delattr(config_obj, local_attr)  # Uncomment if you want to remove after restore
+    
+    # Restore top-level paths
+    restore(config, "workspace_dir")
+    restore(config, "debug_dir")
+    restore(config, "cache_dir")
+    restore(config, "base_model_name")
+    restore(config, "output_model_destination")
+    restore(config, "lora_model_name")
+    
+    # Restore nested paths
+    restore(config.prior, "model_name")
+    restore(config.embedding, "model_name")
+    
+    for add_embedding in config.additional_embeddings:
+        restore(add_embedding, "model_name")
+    
+    # Restore concept paths
+    for concept in config.concepts:
+        restore(concept, "path")
+        restore(concept.text, "prompt_path")
+
+
 def create_trainer(
         config: TrainConfig,
         callbacks: TrainCallbacks,
         commands: TrainCommands,
         reattach: bool = False,
 ):
+    # Restore local paths if cloud is disabled
+    _restore_local_paths(config)
+    
     if config.cloud.enabled:
         from modules.trainer.CloudTrainer import CloudTrainer
         trainer = CloudTrainer(config, callbacks, commands, reattach=reattach)
