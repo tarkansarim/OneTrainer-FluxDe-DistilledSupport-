@@ -1615,22 +1615,40 @@ def _restore_local_paths(config: TrainConfig):
         # Don't restore if cloud is still enabled
         return
     
-    def restore(config_obj, attribute: str):
+    def is_remote_path(path: str) -> bool:
+        """Check if a path looks like a remote cloud path."""
+        if not path:
+            return False
+        path_lower = path.lower()
+        # Check for common remote path patterns
+        return (path.startswith("/workspace") or 
+                "/remote/" in path_lower or
+                path.startswith("/tmp") or
+                (path.startswith("/") and "workspace" in path_lower))
+    
+    def restore(config_obj, attribute: str, default_value: str = None):
         local_attr = "local_" + attribute
+        current_value = getattr(config_obj, attribute, "")
+        
+        # First try to restore from local_* attribute
         if hasattr(config_obj, local_attr):
             local_value = getattr(config_obj, local_attr)
             if local_value:
                 setattr(config_obj, attribute, local_value)
-                # Optionally clear the local_ attribute to avoid confusion
-                # delattr(config_obj, local_attr)  # Uncomment if you want to remove after restore
+                return
+        
+        # If no local_* attribute and current path looks remote, reset to default
+        if is_remote_path(current_value):
+            if default_value is not None:
+                setattr(config_obj, attribute, default_value)
     
-    # Restore top-level paths
+    # Restore top-level paths with defaults
     restore(config, "workspace_dir")
     restore(config, "debug_dir")
     restore(config, "cache_dir")
     restore(config, "base_model_name")
-    restore(config, "output_model_destination")
-    restore(config, "lora_model_name")
+    restore(config, "output_model_destination", "models/model.safetensors")
+    restore(config, "lora_model_name", "models/lora.safetensors")
     
     # Restore nested paths
     restore(config.prior, "model_name")
