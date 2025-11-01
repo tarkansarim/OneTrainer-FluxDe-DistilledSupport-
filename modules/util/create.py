@@ -1649,8 +1649,20 @@ def _restore_local_paths(config: TrainConfig):
         if hasattr(config, "local_workspace_dir") and config.local_workspace_dir:
             config.workspace_dir = config.local_workspace_dir
         else:
-            # Reset to default local workspace
-            config.workspace_dir = "workspace/run"
+            # Don't reset to default - user might have a different local workspace
+            # Only reset if it's clearly a remote path and no local_* exists
+            # Leave it to the user to set the correct path, or check if a common local path exists
+            # For now, try to extract the workspace name from remote path if possible
+            # e.g., /workspace/remote/workspace/Mitch_SRPO_v2 -> workspace/Mitch_SRPO_v2
+            if "/workspace/remote/workspace/" in workspace_dir:
+                # Extract the workspace name from remote path
+                parts = workspace_dir.split("/workspace/remote/workspace/")
+                if len(parts) > 1:
+                    config.workspace_dir = f"workspace/{parts[-1]}"
+                else:
+                    config.workspace_dir = "workspace/run"
+            else:
+                config.workspace_dir = "workspace/run"
     
     # Force reset cache_dir if it looks remote
     cache_dir = getattr(config, "cache_dir", "")
@@ -1660,7 +1672,12 @@ def _restore_local_paths(config: TrainConfig):
         else:
             # Derive from workspace_dir (which we just fixed above)
             if config.workspace_dir and not is_remote_path(config.workspace_dir):
-                config.cache_dir = str(Path(config.workspace_dir).parent / f"{Path(config.workspace_dir).name}-cache")
+                # If workspace_dir is workspace/Mitch_SRPO_v2, cache_dir should be workspace-cache/Mitch_SRPO_v2
+                workspace_path = Path(config.workspace_dir)
+                if workspace_path.name:  # If there's a workspace name
+                    config.cache_dir = f"workspace-cache/{workspace_path.name}"
+                else:
+                    config.cache_dir = "workspace-cache/run"
             else:
                 config.cache_dir = "workspace-cache/run"
     
