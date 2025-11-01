@@ -94,6 +94,10 @@ class GenericTrainer(BaseTrainer):
 
             if self.config.clear_cache_before_training and self.config.latent_caching:
                 self.__clear_cache()
+        
+        # Ensure all processes wait for cache clearing to complete before proceeding
+        if multi.is_enabled():
+            torch.distributed.barrier()
 
         if self.config.train_dtype.enable_tf():
             torch.backends.cuda.matmul.allow_tf32 = True
@@ -149,9 +153,13 @@ class GenericTrainer(BaseTrainer):
 
         self.callbacks.on_update_status("creating the data loader/caching")
 
-        self.data_loader = self.create_data_loader(
-            self.model, self.model.train_progress
-        )
+        # In multi-GPU training, create data loader master-first to avoid deadlocks
+        # during dataset initialization when multiple processes access shared resources
+        for _ in multi.master_first():
+            self.data_loader = self.create_data_loader(
+                self.model, self.model.train_progress
+            )
+        
         self.model_saver = self.create_model_saver()
 
         self.model_sampler = self.create_model_sampler(self.model)
@@ -161,9 +169,11 @@ class GenericTrainer(BaseTrainer):
         self.parameters = self.model.parameters.parameters()
 
         if self.config.validation:
-            self.validation_data_loader = self.create_data_loader(
-                self.model, self.model.train_progress, is_validation=True
-            )
+            # Also create validation data loader master-first
+            for _ in multi.master_first():
+                self.validation_data_loader = self.create_data_loader(
+                    self.model, self.model.train_progress, is_validation=True
+                )
 
     def __save_config_to_workspace(self):
         path = path_util.canonical_join(self.config.workspace_dir, "config")
