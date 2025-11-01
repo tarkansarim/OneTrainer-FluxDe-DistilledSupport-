@@ -156,6 +156,12 @@ class GenericTrainer(BaseTrainer):
             print(f"[Rank {multi.rank()}] Model setup completed, moving to data loader creation...")
         else:
             print("Model setup completed, moving to data loader creation...")
+        
+        # Ensure all processes have completed model setup before proceeding to data loader
+        if multi.is_enabled():
+            torch.distributed.barrier()
+            if multi.is_master():
+                print("All ranks completed model setup, proceeding to data loader creation...")
 
         self.callbacks.on_update_status("creating the data loader/caching")
         
