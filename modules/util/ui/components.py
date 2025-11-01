@@ -1,5 +1,7 @@
 import contextlib
+import os
 from collections.abc import Callable
+from pathlib import Path
 from tkinter import filedialog
 from typing import Any
 
@@ -236,6 +238,24 @@ def file_entry(
             file_path = filedialog.askopenfilename(filetypes=filetypes)
 
         if file_path:
+            # Convert to relative path if within project root
+            try:
+                # Get project root (current working directory where the script is running)
+                project_root = Path.cwd().resolve()
+                selected_path = Path(file_path).resolve()
+                
+                # Check if selected path is within project root
+                try:
+                    relative_path = selected_path.relative_to(project_root)
+                    # Convert to forward slashes for cross-platform compatibility
+                    file_path = str(relative_path).replace('\\', '/')
+                except ValueError:
+                    # Path is not within project root, use absolute path as-is
+                    pass
+            except Exception:
+                # If anything goes wrong, just use the original path
+                pass
+            
             if path_modifier:
                 file_path = path_modifier(file_path)
 
@@ -262,10 +282,27 @@ def dir_entry(master, row, column, ui_state: UIState, var_name: str, command: Ca
         dir_path = filedialog.askdirectory()
 
         if dir_path:
-            ui_state.get_var(var_name).set(dir_path)
+            # Convert to relative path if within project root
+            try:
+                # Get project root (current working directory where the script is running)
+                project_root = Path.cwd().resolve()
+                selected_path = Path(dir_path).resolve()
+                
+                # Check if selected path is within project root
+                try:
+                    relative_path = selected_path.relative_to(project_root)
+                    # Convert to forward slashes for cross-platform compatibility
+                    final_path = str(relative_path).replace('\\', '/')
+                    ui_state.get_var(var_name).set(final_path)
+                except ValueError:
+                    # Path is not within project root, use absolute path as-is
+                    ui_state.get_var(var_name).set(dir_path)
+            except Exception:
+                # If anything goes wrong, just use the original path
+                ui_state.get_var(var_name).set(dir_path)
 
             if command:
-                command(dir_path)
+                command(ui_state.get_var(var_name).get())
 
     button_component = ctk.CTkButton(frame, text="...", width=40, command=__open_dialog)
     button_component.grid(row=0, column=1, padx=(0, PAD), pady=PAD, sticky="nsew")
