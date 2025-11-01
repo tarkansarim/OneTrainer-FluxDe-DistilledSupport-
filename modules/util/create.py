@@ -1249,7 +1249,20 @@ def create_optimizer(
     if state_dict is not None and optimizer is not None:
         if 'param_group_mapping' not in state_dict:
             # Old method of loading the optimizer state. This only works if the param groups did not change.
+            # Validate that the number of parameter groups matches
+            if len(state_dict['param_groups']) != len(parameters):
+                # Parameter group count changed - cannot load old state
+                print(f"Warning: Optimizer state has {len(state_dict['param_groups'])} parameter groups, "
+                      f"but current configuration has {len(parameters)} groups.")
+                print("Continuing training with fresh optimizer state...")
+                return optimizer
+            
             for i, params in enumerate(parameters):
+                if i >= len(state_dict['param_groups']):
+                    # Not enough parameter groups in saved state
+                    print(f"Warning: Optimizer state has fewer parameter groups than current configuration.")
+                    print("Continuing training with fresh optimizer state...")
+                    return optimizer
                 state_dict['param_groups'][i]['lr'] = params['lr']
                 state_dict['param_groups'][i]['initial_lr'] = params['initial_lr']
         else:
@@ -1292,7 +1305,17 @@ def create_optimizer(
             state_dict['state'] = state
             state_dict['param_groups'] = param_groups
 
-        optimizer.load_state_dict(state_dict)
+        try:
+            optimizer.load_state_dict(state_dict)
+        except (ValueError, KeyError) as e:
+            # Optimizer state dict doesn't match current configuration
+            # This can happen when:
+            # - Parameter groups changed (different layer filters, device_indexes, etc.)
+            # - Model structure changed
+            # - Multi-GPU configuration changed
+            # Continue training with fresh optimizer state
+            print(f"Warning: Could not load optimizer state from backup: {e}")
+            print("Continuing training with fresh optimizer state...")
 
     return optimizer
 
