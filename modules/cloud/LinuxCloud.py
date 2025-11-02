@@ -111,10 +111,19 @@ class LinuxCloud(BaseCloud):
         
         if not dir_exists and default_repo_path and repo_name != expected_dir:
             # Expected directory doesn't exist - check if repo-named directory exists
-            # Use ls to check if directory exists (more reliable than test -d in some cases)
-            check_repo_cmd = f'ls -d {shlex.quote(default_repo_path)} 2>/dev/null | head -1'
-            result_repo = self.connection.run(check_repo_cmd, in_stream=False, warn=True, hide='both')
-            repo_dir_found = default_repo_path in (result_repo.stdout or "")
+            # Use the same ls command as debug output for consistency
+            list_dirs_cmd = f'ls -d {shlex.quote(parent)}/*/ 2>/dev/null'
+            result_list = self.connection.run(list_dirs_cmd, in_stream=False, warn=True, hide='both')
+            dirs_output = (result_list.stdout or "").strip()
+            
+            # Check if repo-named directory is in the list (with or without trailing slash)
+            repo_dir_found = False
+            if dirs_output:
+                for line in dirs_output.split('\n'):
+                    dir_path = line.strip().rstrip('/')
+                    if dir_path == default_repo_path:
+                        repo_dir_found = True
+                        break
             
             if repo_dir_found:
                 print(f"Found repo-named directory: {default_repo_path}, moving to {config.onetrainer_dir}")
@@ -128,11 +137,9 @@ class LinuxCloud(BaseCloud):
                 else:
                     print(f"Warning: Move command returned exit code {result_move.exited}")
             else:
-                # List directories to debug
-                list_dirs_cmd = f'ls -d {shlex.quote(parent)}/*/ 2>/dev/null | head -5'
-                result_list = self.connection.run(list_dirs_cmd, in_stream=False, warn=True, hide='both')
-                print(f"Debug: Directories in {parent}: {result_list.stdout}")
-                print(f"Debug: Looking for {default_repo_path}, but check_repo stdout was: {result_repo.stdout}")
+                # Debug output
+                print(f"Debug: Directories in {parent}: {dirs_output}")
+                print(f"Debug: Looking for {default_repo_path}, but not found in list")
                 raise RuntimeError(f"Failed to locate OneTrainer directory. Expected: {config.onetrainer_dir}, Repo name: {repo_name}")
         
         # Final verification
