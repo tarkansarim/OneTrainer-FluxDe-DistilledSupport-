@@ -86,21 +86,28 @@ class LinuxCloud(BaseCloud):
                                   && cd {shlex.quote(parent)} \
                                   && {config.install_cmd})',in_stream=False)
         
-        # If install_cmd doesn't specify target directory, it will clone with repo name
-        # Check if we need to rename/move the directory to match expected onetrainer_dir
-        repo_name_match = re.search(r'github\.com/[^\s/]+/([^\s/]+)', config.install_cmd)
-        if repo_name_match:
-            default_repo_dir = repo_name_match.group(1).rstrip('.git').rstrip('/')
-            if default_repo_dir != expected_dir:
-                # Check if the repo was cloned with default name instead of expected name
-                default_repo_path = str(Path(parent) / default_repo_dir)
-                check_default_cmd = f'test -d {shlex.quote(default_repo_path)} && echo "exists" || echo "missing"'
-                result_check = self.connection.run(check_default_cmd, in_stream=False, warn=True, hide='both')
-                if "exists" in (result_check.stdout or ""):
-                    # Move/rename the directory to the expected name
-                    move_cmd = f'mv {shlex.quote(default_repo_path)} {shlex.quote(config.onetrainer_dir)}'
+        # CRITICAL: If install_cmd doesn't specify target directory, git clone will use repo name
+        # Check if the expected directory exists after clone
+        check_dir_cmd = f'test -d {shlex.quote(config.onetrainer_dir)} && echo "exists" || echo "missing"'
+        result_check = self.connection.run(check_dir_cmd, in_stream=False, warn=True, hide='both')
+        dir_exists = "exists" in (result_check.stdout or "")
+        
+        if not dir_exists:
+            # Expected directory doesn't exist - it was probably cloned with default repo name
+            # Look for any OneTrainer-* directory and move it to the expected location
+            find_repo_cmd = f'cd {shlex.quote(parent)} && find . -maxdepth 1 -type d -name "OneTrainer*" -o -name "*OneTrainer*" | head -1'
+            result_find = self.connection.run(find_repo_cmd, in_stream=False, warn=True, hide='both')
+            found_dir = (result_find.stdout or "").strip()
+            
+            if found_dir:
+                # Remove leading ./ if present
+                found_dir = found_dir.lstrip('./')
+                found_path = str(Path(parent) / found_dir)
+                if found_path != config.onetrainer_dir:
+                    # Move the found directory to the expected location
+                    move_cmd = f'mv {shlex.quote(found_path)} {shlex.quote(config.onetrainer_dir)}'
                     self.connection.run(move_cmd, in_stream=False)
-                    print(f"Moved {default_repo_dir} to {expected_dir}")
+                    print(f"Moved {found_dir} to {expected_dir}")
 
         result=self.connection.run(f"test -d {shlex.quote(config.onetrainer_dir)}/venv",warn=True,in_stream=False)
 
