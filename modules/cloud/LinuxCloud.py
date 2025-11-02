@@ -83,7 +83,8 @@ class LinuxCloud(BaseCloud):
         # Extract repo name from install_cmd to check for misnamed directories
         url_match = re.search(r'github\.com/[^/]+/([^/\s]+)', config.install_cmd)
         repo_name = url_match.group(1).rstrip('.git') if url_match else None
-        default_repo_path = str(Path(parent) / repo_name) if repo_name else None
+        # Use forward slashes for remote Linux paths (don't use Path on Windows which uses backslashes)
+        default_repo_path = f"{parent}/{repo_name}" if repo_name else None
         
         # Check if repo-named directory exists (shouldn't if install_cmd specifies target)
         if default_repo_path and repo_name != expected_dir:
