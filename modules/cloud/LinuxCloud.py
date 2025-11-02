@@ -80,48 +80,56 @@ class LinuxCloud(BaseCloud):
         parent=Path(config.onetrainer_dir).parent.as_posix()
         expected_dir = Path(config.onetrainer_dir).name
         
-        # Clone or update the repo
+        # Extract repo name from install_cmd to check for misnamed directories
+        url_match = re.search(r'github\.com/[^/]+/([^/\s]+)', config.install_cmd)
+        repo_name = url_match.group(1).rstrip('.git') if url_match else None
+        default_repo_path = str(Path(parent) / repo_name) if repo_name else None
+        
+        # Check if repo-named directory exists (shouldn't if install_cmd specifies target)
+        if default_repo_path and repo_name != expected_dir:
+            check_repo_cmd = f'test -d {shlex.quote(default_repo_path)} && echo "exists" || echo "missing"'
+            result_repo = self.connection.run(check_repo_cmd, in_stream=False, warn=True, hide='both')
+            if "exists" in (result_repo.stdout or ""):
+                print(f"Found misnamed directory {default_repo_path}, moving to {config.onetrainer_dir}")
+                # Remove expected dir if it exists (might be empty or corrupted)
+                self.connection.run(f'rm -rf {shlex.quote(config.onetrainer_dir)}', in_stream=False, warn=True)
+                # Move repo-named dir to expected location
+                move_cmd = f'mv {shlex.quote(default_repo_path)} {shlex.quote(config.onetrainer_dir)}'
+                self.connection.run(move_cmd, in_stream=False)
+        
+        # Clone or update the repo (only if expected directory doesn't exist)
         self.connection.run(f'test -e {shlex.quote(config.onetrainer_dir)} \
                               || (mkdir -p {shlex.quote(parent)} \
                                   && cd {shlex.quote(parent)} \
                                   && {config.install_cmd})',in_stream=False)
         
-        # CRITICAL: If install_cmd doesn't specify target directory, git clone will use repo name
-        # Check if the expected directory exists after clone
+        # CRITICAL: After clone, verify expected directory exists
+        # If not, check for repo-named directory and move it
         check_dir_cmd = f'test -d {shlex.quote(config.onetrainer_dir)} && echo "exists" || echo "missing"'
         result_check = self.connection.run(check_dir_cmd, in_stream=False, warn=True, hide='both')
         dir_exists = "exists" in (result_check.stdout or "")
         
-        if not dir_exists:
-            # Expected directory doesn't exist - it was probably cloned with default repo name
-            # Extract repo name from install_cmd URL
-            # Example: "git clone https://github.com/user/repo-name" -> "repo-name"
-            # Or: "git clone https://github.com/user/repo-name.git" -> "repo-name"
-            url_match = re.search(r'github\.com/[^/]+/([^/\s]+)', config.install_cmd)
-            if url_match:
-                repo_name = url_match.group(1).rstrip('.git')
-                # Check if install_cmd specifies a target directory after the URL
-                # Example: "git clone URL target_dir" -> use target_dir, not repo_name
-                parts = config.install_cmd.split()
-                target_dir_specified = False
-                for i, part in enumerate(parts):
-                    if 'github.com' in part and i + 1 < len(parts):
-                        next_part = parts[i + 1].strip()
-                        # If next part exists and doesn't look like a flag, it's the target dir
-                        if next_part and not next_part.startswith('-'):
-                            target_dir_specified = True
-                            break
-                
-                if not target_dir_specified:
-                    # No target directory specified, so git cloned with repo name
-                    default_repo_path = str(Path(parent) / repo_name)
-                    check_repo_cmd = f'test -d {shlex.quote(default_repo_path)} && echo "exists" || echo "missing"'
-                    result_repo = self.connection.run(check_repo_cmd, in_stream=False, warn=True, hide='both')
-                    if "exists" in (result_repo.stdout or ""):
-                        # Move the repo-named directory to the expected location
-                        move_cmd = f'mv {shlex.quote(default_repo_path)} {shlex.quote(config.onetrainer_dir)}'
-                        self.connection.run(move_cmd, in_stream=False)
-                        print(f"Moved {repo_name} to {expected_dir}")
+        if not dir_exists and default_repo_path and repo_name != expected_dir:
+            # Expected directory doesn't exist - check if repo-named directory exists
+            check_repo_cmd = f'test -d {shlex.quote(default_repo_path)} && echo "exists" || echo "missing"'
+            result_repo = self.connection.run(check_repo_cmd, in_stream=False, warn=True, hide='both')
+            if "exists" in (result_repo.stdout or ""):
+                print(f"Found repo-named directory: {default_repo_path}, moving to {config.onetrainer_dir}")
+                move_cmd = f'mv {shlex.quote(default_repo_path)} {shlex.quote(config.onetrainer_dir)}'
+                self.connection.run(move_cmd, in_stream=False)
+                print(f"Moved {repo_name} to {expected_dir}")
+            else:
+                # List directories to debug
+                list_dirs_cmd = f'ls -d {shlex.quote(parent)}/*/ 2>/dev/null | head -5'
+                result_list = self.connection.run(list_dirs_cmd, in_stream=False, warn=True, hide='both')
+                print(f"Debug: Directories in {parent}: {result_list.stdout}")
+                raise RuntimeError(f"Failed to locate OneTrainer directory. Expected: {config.onetrainer_dir}, Repo name: {repo_name}")
+        
+        # Final verification
+        final_check_cmd = f'test -d {shlex.quote(config.onetrainer_dir)} && echo "exists" || echo "missing"'
+        final_result = self.connection.run(final_check_cmd, in_stream=False, warn=True, hide='both')
+        if "missing" in (final_result.stdout or ""):
+            raise RuntimeError(f"OneTrainer directory does not exist at {config.onetrainer_dir} after clone. Install command: {config.install_cmd}")
 
         result=self.connection.run(f"test -d {shlex.quote(config.onetrainer_dir)}/venv",warn=True,in_stream=False)
 
