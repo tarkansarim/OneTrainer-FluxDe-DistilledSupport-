@@ -78,39 +78,43 @@ class LinuxCloud(BaseCloud):
     def _install_onetrainer(self, update: bool=False):
         config=self.config.cloud
         parent=Path(config.onetrainer_dir).parent.as_posix()
-        expected_dir = Path(config.onetrainer_dir).name
         
-        # Extract repo name from install_cmd to check for misnamed directories
+        # Extract repo name from install_cmd to find actual directory after clone
         url_match = re.search(r'github\.com/[^/]+/([^/\s]+)', config.install_cmd)
         repo_name = url_match.group(1).rstrip('.git') if url_match else None
-        # Use forward slashes for remote Linux paths (don't use Path on Windows which uses backslashes)
         default_repo_path = f"{parent}/{repo_name}" if repo_name else None
         
-        # Check if repo-named directory exists (shouldn't if install_cmd specifies target)
-        if default_repo_path and repo_name != expected_dir:
-            check_repo_cmd = f'test -d {shlex.quote(default_repo_path)} && echo "exists" || echo "missing"'
-            result_repo = self.connection.run(check_repo_cmd, in_stream=False, warn=True, hide='both')
-            if "exists" in (result_repo.stdout or ""):
-                print(f"Found misnamed directory {default_repo_path}, moving to {config.onetrainer_dir}")
-                # Remove expected dir if it exists (might be empty or corrupted)
-                self.connection.run(f'rm -rf {shlex.quote(config.onetrainer_dir)}', in_stream=False, warn=True)
-                # Move repo-named dir to expected location
-                move_cmd = f'mv {shlex.quote(default_repo_path)} {shlex.quote(config.onetrainer_dir)}'
-                self.connection.run(move_cmd, in_stream=False)
-        
-        # Clone or update the repo (only if expected directory doesn't exist)
+        # Clone or update the repo if directory doesn't exist
         self.connection.run(f'test -e {shlex.quote(config.onetrainer_dir)} \
                               || (mkdir -p {shlex.quote(parent)} \
                                   && cd {shlex.quote(parent)} \
                                   && {config.install_cmd})',in_stream=False)
         
-        # CRITICAL: After clone, verify expected directory exists
-        check_dir_cmd = f'test -d {shlex.quote(config.onetrainer_dir)} && echo "exists" || echo "missing"'
-        result_check = self.connection.run(check_dir_cmd, in_stream=False, warn=True, hide='both')
-        dir_exists = "exists" in (result_check.stdout or "")
+        # Find the actual directory that was created (could be repo name or install_cmd target)
+        # NEVER rename or move directories - use whatever git creates
+        actual_repo_dir = None
         
-        # CRITICAL: Always verify and fix git remote, even on fresh clones
-        # Extract the expected repo URL from install_cmd (should be the fork URL)
+        # Check if expected directory exists
+        check_expected_cmd = f'test -d {shlex.quote(config.onetrainer_dir)} && echo "exists" || echo "missing"'
+        result_expected = self.connection.run(check_expected_cmd, in_stream=False, warn=True, hide='both')
+        if "exists" in (result_expected.stdout or ""):
+            actual_repo_dir = config.onetrainer_dir
+        
+        # If expected doesn't exist, check for repo-named directory
+        if not actual_repo_dir and default_repo_path:
+            check_default_cmd = f'test -d {shlex.quote(default_repo_path)} && echo "exists" || echo "missing"'
+            result_default = self.connection.run(check_default_cmd, in_stream=False, warn=True, hide='both')
+            if "exists" in (result_default.stdout or ""):
+                actual_repo_dir = default_repo_path
+        
+        if not actual_repo_dir:
+            raise RuntimeError(f"OneTrainer directory not found at {config.onetrainer_dir} or {default_repo_path} after clone. Install command: {config.install_cmd}")
+        
+        # Update config to use the actual directory that exists (NEVER rename the directory)
+        config.onetrainer_dir = actual_repo_dir
+        print(f"Using OneTrainer directory: {actual_repo_dir}")
+        
+        # CRITICAL: Always verify and fix git remote
         install_cmd = config.install_cmd
         url_match = re.search(r'https://github\.com/[^\s/]+/[^\s/]+', install_cmd)
         if url_match:
@@ -120,77 +124,21 @@ class LinuxCloud(BaseCloud):
         else:
             expected_repo_url = "https://github.com/tarkansarim/OneTrainer-FluxDe-DistilledSupport-.git"
         
-        # Determine where the repo was actually cloned (could be config.onetrainer_dir or default_repo_path)
-        actual_repo_dir = config.onetrainer_dir if dir_exists else default_repo_path
+        cmd_env_check = f"export PATH=$PATH:/usr/local/cuda/bin:/venv/main/bin && cd {shlex.quote(actual_repo_dir)}"
+        verify_remote_cmd = f"{cmd_env_check} && (git remote get-url origin 2>/dev/null || echo '')"
+        result_remote = self.connection.run(verify_remote_cmd, in_stream=False, warn=True, hide='both')
+        current_remote = (result_remote.stdout or "").strip()
         
-        if actual_repo_dir:
-            # Check current origin remote URL (works even for fresh clones)
-            cmd_env_check = f"export PATH=$PATH:/usr/local/cuda/bin:/venv/main/bin && cd {shlex.quote(actual_repo_dir)}"
-            verify_remote_cmd = f"{cmd_env_check} && (git remote get-url origin 2>/dev/null || echo '')"
-            result_remote = self.connection.run(verify_remote_cmd, in_stream=False, warn=True, hide='both')
-            current_remote = (result_remote.stdout or "").strip()
-            
-            # Normalize for comparison
-            current_remote_normalized = current_remote.rstrip('.git')
-            expected_repo_url_normalized = expected_repo_url.rstrip('.git')
-            
-            # If remote doesn't match fork URL, set it correctly (CRITICAL for both fresh clones and updates)
-            if current_remote and expected_repo_url_normalized not in current_remote_normalized:
-                print(f"Warning: OneTrainer repo remote points to {current_remote}, not the fork. Fixing...")
-                fix_remote_cmd = f"{cmd_env_check} && git remote set-url origin {shlex.quote(expected_repo_url)}"
-                self.connection.run(fix_remote_cmd, in_stream=False)
-                print(f"Set git remote to: {expected_repo_url}")
+        # Normalize for comparison
+        current_remote_normalized = current_remote.rstrip('.git')
+        expected_repo_url_normalized = expected_repo_url.rstrip('.git')
         
-        # Only move directory if install_cmd didn't specify a target AND expected directory doesn't exist
-        # Check if install_cmd specifies a target directory after the URL
-        install_cmd_parts = install_cmd.split()
-        has_target_dir = False
-        for i, part in enumerate(install_cmd_parts):
-            if 'github.com' in part and i + 1 < len(install_cmd_parts):
-                next_part = install_cmd_parts[i + 1].strip()
-                # If next part exists and doesn't look like a flag, it's the target dir
-                if next_part and not next_part.startswith('-'):
-                    has_target_dir = True
-                    break
-        
-        if not dir_exists and not has_target_dir and default_repo_path and repo_name != expected_dir:
-            # Expected directory doesn't exist - check if repo-named directory exists
-            # Use the same ls command as debug output for consistency
-            list_dirs_cmd = f'ls -d {shlex.quote(parent)}/*/ 2>/dev/null'
-            result_list = self.connection.run(list_dirs_cmd, in_stream=False, warn=True, hide='both')
-            dirs_output = (result_list.stdout or "").strip()
-            
-            # Check if repo-named directory is in the list (with or without trailing slash)
-            repo_dir_found = False
-            if dirs_output:
-                for line in dirs_output.split('\n'):
-                    dir_path = line.strip().rstrip('/')
-                    if dir_path == default_repo_path:
-                        repo_dir_found = True
-                        break
-            
-            if repo_dir_found:
-                print(f"Found repo-named directory: {default_repo_path}, moving to {config.onetrainer_dir}")
-                # Ensure target doesn't exist (remove if it does)
-                self.connection.run(f'rm -rf {shlex.quote(config.onetrainer_dir)}', in_stream=False, warn=True)
-                # Move repo-named dir to expected location
-                move_cmd = f'mv {shlex.quote(default_repo_path)} {shlex.quote(config.onetrainer_dir)}'
-                result_move = self.connection.run(move_cmd, in_stream=False, warn=True)
-                if result_move.exited == 0:
-                    print(f"Successfully moved {repo_name} to {expected_dir}")
-                else:
-                    print(f"Warning: Move command returned exit code {result_move.exited}")
-            else:
-                # Debug output
-                print(f"Debug: Directories in {parent}: {dirs_output}")
-                print(f"Debug: Looking for {default_repo_path}, but not found in list")
-                raise RuntimeError(f"Failed to locate OneTrainer directory. Expected: {config.onetrainer_dir}, Repo name: {repo_name}")
-        
-        # Final verification
-        final_check_cmd = f'test -d {shlex.quote(config.onetrainer_dir)} && echo "exists" || echo "missing"'
-        final_result = self.connection.run(final_check_cmd, in_stream=False, warn=True, hide='both')
-        if "missing" in (final_result.stdout or ""):
-            raise RuntimeError(f"OneTrainer directory does not exist at {config.onetrainer_dir} after clone. Install command: {config.install_cmd}")
+        # If remote doesn't match fork URL, set it correctly
+        if current_remote and expected_repo_url_normalized not in current_remote_normalized:
+            print(f"Warning: OneTrainer repo remote points to {current_remote}, not the fork. Fixing...")
+            fix_remote_cmd = f"{cmd_env_check} && git remote set-url origin {shlex.quote(expected_repo_url)}"
+            self.connection.run(fix_remote_cmd, in_stream=False)
+            print(f"Set git remote to: {expected_repo_url}")
 
         result=self.connection.run(f"test -d {shlex.quote(config.onetrainer_dir)}/venv",warn=True,in_stream=False)
 
