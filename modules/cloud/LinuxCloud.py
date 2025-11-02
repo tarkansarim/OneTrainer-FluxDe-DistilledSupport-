@@ -194,7 +194,9 @@ class LinuxCloud(BaseCloud):
                     self.connection.run(fix_remote_cmd, in_stream=False)
                     print(f"Set git remote to: {expected_repo_url}")
                 
-                self.connection.run(cmd_env + "&& ./update.sh", in_stream=False)
+                # Update repo and ensure dependencies are installed
+                # Force requirements installation by unsetting OT_LAZY_UPDATES temporarily
+                self.connection.run(cmd_env + " && unset OT_LAZY_UPDATES && ./update.sh", in_stream=False)
         else:
             self.connection.run(cmd_env + "&& ./install.sh", in_stream=False)
 
