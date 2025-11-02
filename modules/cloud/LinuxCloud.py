@@ -242,13 +242,16 @@ class LinuxCloud(BaseCloud):
             return
 
         cmd="export PATH=$PATH:/usr/local/cuda/bin:/venv/main/bin \
-             && export PYTHONUNBUFFERED=1 \
-             && unset OT_LAZY_UPDATES"
+             && export PYTHONUNBUFFERED=1"
 
         if self.config.secrets.huggingface_token != "":
             cmd+=f" && export HF_TOKEN={self.config.secrets.huggingface_token}"
         if config.huggingface_cache_dir != "":
             cmd+=f" && export HF_HOME={config.huggingface_cache_dir}"
+
+        # Ensure prepare_runtime_environment installs dependencies properly
+        # by unsetting OT_LAZY_UPDATES, which would otherwise skip dependency checks
+        cmd+=f' && cd {shlex.quote(config.onetrainer_dir)} && unset OT_LAZY_UPDATES'
 
         cmd+=f' && {config.onetrainer_dir}/run-cmd.sh train_remote --config-path={shlex.quote(self.config_file)} \
                                                                    --callback-path={shlex.quote(self.callback_file)} \
