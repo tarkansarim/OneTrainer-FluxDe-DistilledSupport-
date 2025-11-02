@@ -94,20 +94,34 @@ class LinuxCloud(BaseCloud):
         
         if not dir_exists:
             # Expected directory doesn't exist - it was probably cloned with default repo name
-            # Look for any OneTrainer-* directory and move it to the expected location
-            find_repo_cmd = f'cd {shlex.quote(parent)} && find . -maxdepth 1 -type d -name "OneTrainer*" -o -name "*OneTrainer*" | head -1'
-            result_find = self.connection.run(find_repo_cmd, in_stream=False, warn=True, hide='both')
-            found_dir = (result_find.stdout or "").strip()
-            
-            if found_dir:
-                # Remove leading ./ if present
-                found_dir = found_dir.lstrip('./')
-                found_path = str(Path(parent) / found_dir)
-                if found_path != config.onetrainer_dir:
-                    # Move the found directory to the expected location
-                    move_cmd = f'mv {shlex.quote(found_path)} {shlex.quote(config.onetrainer_dir)}'
-                    self.connection.run(move_cmd, in_stream=False)
-                    print(f"Moved {found_dir} to {expected_dir}")
+            # Extract repo name from install_cmd URL
+            # Example: "git clone https://github.com/user/repo-name" -> "repo-name"
+            # Or: "git clone https://github.com/user/repo-name.git" -> "repo-name"
+            url_match = re.search(r'github\.com/[^/]+/([^/\s]+)', config.install_cmd)
+            if url_match:
+                repo_name = url_match.group(1).rstrip('.git')
+                # Check if install_cmd specifies a target directory after the URL
+                # Example: "git clone URL target_dir" -> use target_dir, not repo_name
+                parts = config.install_cmd.split()
+                target_dir_specified = False
+                for i, part in enumerate(parts):
+                    if 'github.com' in part and i + 1 < len(parts):
+                        next_part = parts[i + 1].strip()
+                        # If next part exists and doesn't look like a flag, it's the target dir
+                        if next_part and not next_part.startswith('-'):
+                            target_dir_specified = True
+                            break
+                
+                if not target_dir_specified:
+                    # No target directory specified, so git cloned with repo name
+                    default_repo_path = str(Path(parent) / repo_name)
+                    check_repo_cmd = f'test -d {shlex.quote(default_repo_path)} && echo "exists" || echo "missing"'
+                    result_repo = self.connection.run(check_repo_cmd, in_stream=False, warn=True, hide='both')
+                    if "exists" in (result_repo.stdout or ""):
+                        # Move the repo-named directory to the expected location
+                        move_cmd = f'mv {shlex.quote(default_repo_path)} {shlex.quote(config.onetrainer_dir)}'
+                        self.connection.run(move_cmd, in_stream=False)
+                        print(f"Moved {repo_name} to {expected_dir}")
 
         result=self.connection.run(f"test -d {shlex.quote(config.onetrainer_dir)}/venv",warn=True,in_stream=False)
 
