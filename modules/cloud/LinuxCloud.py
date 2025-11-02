@@ -1,4 +1,5 @@
 import pickle
+import re
 import shlex
 import threading
 import time
@@ -94,6 +95,39 @@ class LinuxCloud(BaseCloud):
 
         if result.exited == 0:
             if update:
+                # CRITICAL: Ensure we're pulling from the correct fork, not the original repo
+                # Extract the expected repo URL from install_cmd (should be the fork URL)
+                # Parse install_cmd to get the repo URL (e.g., "git clone https://github.com/user/repo.git" or "git clone https://github.com/user/repo")
+                install_cmd = config.install_cmd
+                # Extract URL from install_cmd - match git clone URL patterns
+                url_match = re.search(r'https://github\.com/[^\s/]+/[^\s/]+', install_cmd)
+                if url_match:
+                    expected_repo_url = url_match.group(0)
+                    # Ensure it ends with .git for comparison
+                    if not expected_repo_url.endswith('.git'):
+                        expected_repo_url += '.git'
+                else:
+                    # Fallback: use the default fork URL
+                    expected_repo_url = "https://github.com/tarkansarim/OneTrainer-FluxDe-DistilledSupport-.git"
+                
+                # Check current origin remote URL
+                verify_remote_cmd = f"{cmd_env} && (git remote get-url origin 2>/dev/null || echo '')"
+                result = self.connection.run(verify_remote_cmd, in_stream=False, warn=True, hide='both')
+                # Fabric's result object has stdout as a property
+                current_remote = (result.stdout or "").strip()
+                
+                # Normalize current remote for comparison (handle .git suffix)
+                current_remote_normalized = current_remote.rstrip('.git')
+                expected_repo_url_normalized = expected_repo_url.rstrip('.git')
+                
+                # If remote doesn't match fork URL, set it correctly
+                if expected_repo_url_normalized not in current_remote_normalized:
+                    if current_remote:
+                        print(f"Warning: OneTrainer repo remote points to {current_remote}, not the fork. Fixing...")
+                    fix_remote_cmd = f"{cmd_env} && git remote set-url origin {shlex.quote(expected_repo_url)}"
+                    self.connection.run(fix_remote_cmd, in_stream=False)
+                    print(f"Set git remote to: {expected_repo_url}")
+                
                 self.connection.run(cmd_env + "&& ./update.sh", in_stream=False)
         else:
             self.connection.run(cmd_env + "&& ./install.sh", in_stream=False)

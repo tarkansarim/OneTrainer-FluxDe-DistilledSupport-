@@ -9,7 +9,7 @@ FROM runpod/pytorch:2.8.0-py3.11-cuda12.8.1-cudnn-devel-ubuntu22.04
 #in the image cache of a pod, and no download is necessary
 
 WORKDIR /
-RUN git clone https://github.com/Nerogar/OneTrainer
+RUN git clone https://github.com/tarkansarim/OneTrainer-FluxDe-DistilledSupport- OneTrainer
 RUN cd OneTrainer \
  && export OT_PLATFORM_REQUIREMENTS=requirements-cuda.txt \
  && export OT_LAZY_UPDATES=true \

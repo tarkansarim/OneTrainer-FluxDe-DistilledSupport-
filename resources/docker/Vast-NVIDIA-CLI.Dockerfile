@@ -6,7 +6,7 @@
 FROM vastai/pytorch:cuda-12.8.1-auto
 
 WORKDIR /
-RUN git clone https://github.com/Nerogar/OneTrainer
+RUN git clone https://github.com/tarkansarim/OneTrainer-FluxDe-DistilledSupport- OneTrainer
 RUN cd OneTrainer \
  && export OT_PLATFORM_REQUIREMENTS=requirements-cuda.txt \
  && export OT_LAZY_UPDATES=true \
