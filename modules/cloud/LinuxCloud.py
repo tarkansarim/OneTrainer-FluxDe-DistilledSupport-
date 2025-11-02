@@ -243,7 +243,7 @@ class LinuxCloud(BaseCloud):
 
         cmd="export PATH=$PATH:/usr/local/cuda/bin:/venv/main/bin \
              && export PYTHONUNBUFFERED=1 \
-             && export OT_LAZY_UPDATES=true"
+             && unset OT_LAZY_UPDATES"
 
         if self.config.secrets.huggingface_token != "":
             cmd+=f" && export HF_TOKEN={self.config.secrets.huggingface_token}"
