@@ -75,6 +75,37 @@ class LinuxCloud(BaseCloud):
         super().setup()
         self.connection.run(f'mkfifo {shlex.quote(self.command_pipe)}',warn=True,hide=True,in_stream=False)
 
+    def _verify_mgds_import(self, onetrainer_dir: str) -> bool:
+        """
+        Verify that mgds can be imported. If not, attempt to reinstall it.
+        
+        Returns:
+            True if mgds is importable, False otherwise
+        """
+        venv_python = f"{onetrainer_dir}/venv/bin/python"
+        venv_pip = f"{onetrainer_dir}/venv/bin/pip"
+        
+        # Test if mgds can be imported
+        test_cmd = f"cd {shlex.quote(onetrainer_dir)} && {venv_python} -c \"import mgds.pipelineModules.RandomNoise; print('mgds import successful')\""
+        result = self.connection.run(test_cmd, in_stream=False, warn=True, hide='both')
+        
+        if result.exited == 0:
+            return True
+        
+        # Import failed, attempt to reinstall mgds
+        print("Warning: mgds not importable, attempting reinstall...")
+        reinstall_cmd = f"cd {shlex.quote(onetrainer_dir)} && {venv_pip} install --upgrade --force-reinstall --no-deps -e git+https://github.com/Nerogar/mgds.git@50a2394#egg=mgds"
+        self.connection.run(reinstall_cmd, in_stream=False, warn=True)
+        
+        # Verify import again after reinstall
+        result = self.connection.run(test_cmd, in_stream=False, warn=True, hide='both')
+        if result.exited == 0:
+            print("mgds reinstall successful")
+            return True
+        else:
+            print("Warning: mgds reinstall failed or still not importable")
+            return False
+
     def _install_onetrainer(self, update: bool=False):
         config=self.config.cloud
         parent=Path(config.onetrainer_dir).parent.as_posix()
@@ -190,6 +221,12 @@ class LinuxCloud(BaseCloud):
                 self.connection.run(cmd_env + " && unset OT_LAZY_UPDATES && ./update.sh", in_stream=False)
         else:
             self.connection.run(cmd_env + "&& ./install.sh", in_stream=False)
+        
+        # Verify mgds can be imported after installation/update
+        # This ensures the editable install worked correctly
+        venv_exists = self.connection.run(f"test -d {shlex.quote(config.onetrainer_dir)}/venv", warn=True, in_stream=False)
+        if venv_exists.exited == 0:
+            self._verify_mgds_import(config.onetrainer_dir)
 
     def _make_tensorboard_tunnel(self):
         self.tensorboard_tunnel_stop=threading.Event()
@@ -231,6 +268,10 @@ class LinuxCloud(BaseCloud):
         if self.can_reattach():
             self.__trail_detached_trainer()
             return
+
+        # Verify mgds can be imported before training starts
+        # This catches any issues with editable installs before training fails
+        self._verify_mgds_import(config.onetrainer_dir)
 
         cmd="export PATH=$PATH:/usr/local/cuda/bin:/venv/main/bin \
              && export PYTHONUNBUFFERED=1"
