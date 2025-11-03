@@ -111,21 +111,65 @@ class BaseSSHFileSync(BaseFileSync):
         self.download_file(local_file=local,remote_file=remote)
 
     def sync_down_dir(self,local : Path,remote : Path,filter=None):
-        sync_info=self.__get_sync_info(remote)
-        dirs={}
-        for remote_entry in sync_info:
-            local_entry=local / remote_entry.relative_to(remote)
-            if ((filter is not None and not filter(remote_entry))
-                or not self.__needs_download(local=local_entry,remote=remote_entry,sync_info=sync_info)):
-                continue
+        # Always pack directories on remote before downloading for faster transfer
+        try:
+            # Pack directory on remote side
+            remote_archives = self._pack_directory_remote(remote)
+            
+            # If single archive, wrap in list for consistent handling
+            if isinstance(remote_archives, Path):
+                remote_archives = [remote_archives]
+            
+            # Download all archive shards
+            local_archives = []
+            temp_dir = Path(tempfile.gettempdir())
+            
+            for i, remote_archive in enumerate(remote_archives):
+                if len(remote_archives) == 1:
+                    # Single archive: use simple name
+                    unique_id = uuid.uuid4().hex[:8]
+                    local_archive = temp_dir / f"{local.name}_{unique_id}.tar.gz"
+                else:
+                    # Multiple shards: use numbered pattern
+                    unique_id = uuid.uuid4().hex[:8]
+                    local_archive = temp_dir / f"{local.name}_{unique_id}.tar.gz.part{i+1:03d}"
+                local_archives.append(local_archive)
+                
+                print(f"Downloading archive {i+1}/{len(remote_archives)}...")
+                local_archive.parent.mkdir(parents=True, exist_ok=True)
+                self.download_file(local_file=local_archive, remote_file=remote_archive)
+            
+            # Unpack all archives locally
+            self._unpack_archives_local(local_archives, local)
+            
+            # Clean up remote archives and temp directory
+            # Extract temp dir from first archive path
+            if remote_archives:
+                remote_temp_dir = remote_archives[0].parent
+                self.sync_connection.run(f'rm -rf {shlex.quote(remote_temp_dir.as_posix())}', in_stream=False, warn=True)
+            
+            # Clean up local archives
+            for local_archive in local_archives:
+                local_archive.unlink()
+                
+        except Exception as e:
+            # Fall back to file-by-file download if packing fails
+            print(f"Warning: Remote packing failed ({e}), falling back to file-by-file download...")
+            sync_info=self.__get_sync_info(remote)
+            dirs={}
+            for remote_entry in sync_info:
+                local_entry=local / remote_entry.relative_to(remote)
+                if ((filter is not None and not filter(remote_entry))
+                    or not self.__needs_download(local=local_entry,remote=remote_entry,sync_info=sync_info)):
+                    continue
 
-            if local_entry.parent not in dirs:
-                dirs[local_entry.parent]=[]
-            dirs[local_entry.parent].append(remote_entry)
+                if local_entry.parent not in dirs:
+                    dirs[local_entry.parent]=[]
+                dirs[local_entry.parent].append(remote_entry)
 
-        for dir,files in dirs.items():
-            dir.mkdir(parents=True,exist_ok=True)
-            self.download_files(local_dir=dir,remote_files=files)
+            for dir,files in dirs.items():
+                dir.mkdir(parents=True,exist_ok=True)
+                self.download_files(local_dir=dir,remote_files=files)
 
 
     def __get_sync_info(self,remote : Path):
@@ -280,6 +324,131 @@ class BaseSSHFileSync(BaseFileSync):
         print(f"Created {len(archive_paths)} archive shard(s)")
         return archive_paths
 
+    def _pack_directory_remote(self, remote_dir: Path) -> Path | list[Path]:
+        """
+        Pack a directory on the remote side into one or more tar.gz archives (sharded if large).
+        
+        Args:
+            remote_dir: Remote directory to pack
+            
+        Returns:
+            Path to single archive file, or list of Paths if sharded
+        """
+        # Shard size threshold: 2GB per archive (same as local packing)
+        SHARD_SIZE_THRESHOLD = 2 * 1024 * 1024 * 1024  # 2GB
+        
+        # Check if directory exists and get size
+        self.sync_connection.open()
+        
+        # Get directory size using du command
+        size_cmd = f'du -sb {shlex.quote(remote_dir.as_posix())} 2>/dev/null | cut -f1 || echo "0"'
+        result = self.sync_connection.run(size_cmd, in_stream=False, warn=True, hide='both')
+        total_size = int(result.stdout.strip() or "0")
+        
+        # Create temporary directory for archives on remote
+        unique_id = uuid.uuid4().hex[:8]
+        remote_temp_dir = Path(f"/tmp/onetrainer_pack_{unique_id}")
+        self.sync_connection.run(f'mkdir -p {shlex.quote(remote_temp_dir.as_posix())}', in_stream=False)
+        
+        try:
+            if total_size < SHARD_SIZE_THRESHOLD:
+                # Single archive
+                remote_archive = remote_temp_dir / f"{remote_dir.name}.tar.gz"
+                # Create archive on remote
+                cmd = f'cd {shlex.quote(remote_dir.parent.as_posix())} && tar -czf {shlex.quote(remote_archive.as_posix())} {shlex.quote(remote_dir.name)}'
+                self.sync_connection.run(cmd, in_stream=False)
+                return remote_archive
+            else:
+                # Sharding needed - use find + split logic via SSH
+                print(f"Remote directory size ({total_size / (1024*1024*1024):.2f} GB) exceeds threshold, creating sharded archives...")
+                
+                # Get list of all files/dirs in the directory (sorted for consistency)
+                find_cmd = f'find {shlex.quote(remote_dir.as_posix())} -mindepth 1 -maxdepth 1 | sort'
+                result = self.sync_connection.run(find_cmd, in_stream=False, warn=True, hide='both')
+                items = [line.strip() for line in result.stdout.splitlines() if line.strip()]
+                
+                if not items:
+                    # Empty directory
+                    remote_archive = remote_temp_dir / f"{remote_dir.name}.tar.gz"
+                    cmd = f'tar -czf {shlex.quote(remote_archive.as_posix())} -T /dev/null'
+                    self.sync_connection.run(cmd, in_stream=False)
+                    return remote_archive
+                
+                # Get sizes for all items
+                item_sizes = {}
+                for item_path in items:
+                    size_result = self.sync_connection.run(
+                        f'du -sb {shlex.quote(item_path)} 2>/dev/null | cut -f1 || echo "0"',
+                        in_stream=False, warn=True, hide='both'
+                    )
+                    item_sizes[item_path] = int(size_result.stdout.strip() or "0")
+                
+                # Create shards
+                remote_archives = []
+                current_shard_items = []
+                current_shard_size = 0
+                shard_num = 1
+                
+                for item_path, item_size in item_sizes.items():
+                    item_name = Path(item_path).name
+                    
+                    # If single item exceeds threshold, put it in its own shard
+                    if item_size >= SHARD_SIZE_THRESHOLD:
+                        # Save current shard if it has items
+                        if current_shard_items:
+                            remote_archive = remote_temp_dir / f"{remote_dir.name}.tar.gz.part{shard_num:03d}"
+                            # Create archive: change to remote_dir and add items by name
+                            cmd = f'cd {shlex.quote(remote_dir.as_posix())} && tar -czf {shlex.quote(remote_archive.as_posix())} '
+                            for item_path in current_shard_items:
+                                item_name = Path(item_path).name
+                                cmd += f'{shlex.quote(item_name)} '
+                            self.sync_connection.run(cmd, in_stream=False)
+                            remote_archives.append(remote_archive)
+                            shard_num += 1
+                            current_shard_items = []
+                            current_shard_size = 0
+                        
+                        # Create shard for this large item
+                        remote_archive = remote_temp_dir / f"{remote_dir.name}.tar.gz.part{shard_num:03d}"
+                        cmd = f'cd {shlex.quote(remote_dir.parent.as_posix())} && tar -czf {shlex.quote(remote_archive.as_posix())} -C {shlex.quote(remote_dir.as_posix())} {shlex.quote(item_name)}'
+                        self.sync_connection.run(cmd, in_stream=False)
+                        remote_archives.append(remote_archive)
+                        shard_num += 1
+                    elif current_shard_size + item_size > SHARD_SIZE_THRESHOLD:
+                        # Current shard would exceed threshold, create it and start new one
+                        if current_shard_items:
+                            remote_archive = remote_temp_dir / f"{remote_dir.name}.tar.gz.part{shard_num:03d}"
+                            cmd = f'cd {shlex.quote(remote_dir.as_posix())} && tar -czf {shlex.quote(remote_archive.as_posix())} '
+                            for item_path in current_shard_items:
+                                item_name = Path(item_path).name
+                                cmd += f'{shlex.quote(item_name)} '
+                            self.sync_connection.run(cmd, in_stream=False)
+                            remote_archives.append(remote_archive)
+                            shard_num += 1
+                        current_shard_items = [item_path]
+                        current_shard_size = item_size
+                    else:
+                        # Add to current shard
+                        current_shard_items.append(item_path)
+                        current_shard_size += item_size
+                
+                # Create final shard if it has items
+                if current_shard_items:
+                    remote_archive = remote_temp_dir / f"{remote_dir.name}.tar.gz.part{shard_num:03d}"
+                    cmd = f'cd {shlex.quote(remote_dir.as_posix())} && tar -czf {shlex.quote(remote_archive.as_posix())} '
+                    for item_path in current_shard_items:
+                        item_name = Path(item_path).name
+                        cmd += f'{shlex.quote(item_name)} '
+                    self.sync_connection.run(cmd, in_stream=False)
+                    remote_archives.append(remote_archive)
+                
+                print(f"Created {len(remote_archives)} archive shard(s) on remote")
+                return remote_archives
+        except Exception as e:
+            # Clean up temp directory on error
+            self.sync_connection.run(f'rm -rf {shlex.quote(remote_temp_dir.as_posix())}', in_stream=False, warn=True)
+            raise
+
     def _unpack_archives(self, remote_archives: list[Path], remote_target: Path, recursive: bool):
         """
         Unpack one or more tar.gz archives on the remote side.
@@ -299,3 +468,20 @@ class BaseSSHFileSync(BaseFileSync):
             # Using -C to extract to target directory
             cmd = f'tar -xzf {shlex.quote(remote_archive.as_posix())} -C {shlex.quote(remote_target.as_posix())}'
             self.sync_connection.run(cmd, in_stream=False)
+
+    def _unpack_archives_local(self, local_archives: list[Path], local_target: Path):
+        """
+        Unpack one or more tar.gz archives on the local side.
+        
+        Args:
+            local_archives: List of archive paths on local machine
+            local_target: Target directory where contents should be extracted
+        """
+        # Ensure target directory exists
+        local_target.mkdir(parents=True, exist_ok=True)
+        
+        # Extract all archives in order using Python's tarfile
+        for i, local_archive in enumerate(local_archives):
+            print(f"Extracting archive {i+1}/{len(local_archives)} locally...")
+            with tarfile.open(local_archive, 'r:gz') as tar:
+                tar.extractall(path=local_target)
