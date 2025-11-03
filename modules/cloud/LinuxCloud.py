@@ -86,7 +86,7 @@ class LinuxCloud(BaseCloud):
         venv_pip = f"{onetrainer_dir}/venv/bin/pip"
         
         # Test if mgds can be imported
-        test_cmd = f"cd {shlex.quote(onetrainer_dir)} && {venv_python} -c \"import mgds.pipelineModules.RandomNoise; print('mgds import successful')\" 2>&1"
+        test_cmd = f"cd {shlex.quote(onetrainer_dir)} && {venv_python} -c \"import mgds.MGDS; print('mgds import successful')\" 2>&1"
         result = self.connection.run(test_cmd, in_stream=False, warn=True, hide='both')
         
         if result.exited == 0:

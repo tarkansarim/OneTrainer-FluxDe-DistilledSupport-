@@ -31,7 +31,6 @@ from mgds.pipelineModules.RandomContrast import RandomContrast
 from mgds.pipelineModules.RandomFlip import RandomFlip
 from mgds.pipelineModules.RandomHue import RandomHue
 from mgds.pipelineModules.RandomMaskRotateCrop import RandomMaskRotateCrop
-from mgds.pipelineModules.RandomNoise import RandomNoise
 from mgds.pipelineModules.RandomRotate import RandomRotate
 from mgds.pipelineModules.RandomSaturation import RandomSaturation
 from mgds.pipelineModules.ShuffleTags import ShuffleTags
@@ -260,33 +259,21 @@ class ConceptWindow(ctk.CTkToplevel):
         components.switch(frame, 7, 2, self.image_ui_state, "enable_fixed_hue")
         components.entry(frame, 7, 3, self.image_ui_state, "random_hue_max_strength")
 
-        # random noise
-        components.label(frame, 8, 0, "Random Noise",
-                         tooltip="Randomly adds noise to the sample during training")
-        components.switch(frame, 8, 1, self.image_ui_state, "enable_random_noise")
-        components.switch(frame, 8, 2, self.image_ui_state, "enable_fixed_noise")
-        components.entry(frame, 8, 3, self.image_ui_state, "random_noise_max_strength")
-        
-        # noise min strength
-        components.label(frame, 9, 0, "Noise Min (Floor)",
-                         tooltip="Minimum noise amount - ensures all images get at least this much noise")
-        components.entry(frame, 9, 3, self.image_ui_state, "random_noise_min_strength")
-
         # random circular mask shrink
-        components.label(frame, 10, 0, "Circular Mask Generation",
+        components.label(frame, 8, 0, "Circular Mask Generation",
                          tooltip="Automatically create circular masks for masked training")
-        components.switch(frame, 10, 1, self.image_ui_state, "enable_random_circular_mask_shrink")
+        components.switch(frame, 8, 1, self.image_ui_state, "enable_random_circular_mask_shrink")
 
         # random rotate and crop
-        components.label(frame, 11, 0, "Random Rotate and Crop",
+        components.label(frame, 9, 0, "Random Rotate and Crop",
                          tooltip="Randomly rotate the training samples and crop to the masked region")
-        components.switch(frame, 11, 1, self.image_ui_state, "enable_random_mask_rotate_crop")
+        components.switch(frame, 9, 1, self.image_ui_state, "enable_random_mask_rotate_crop")
 
         # circular mask generation
-        components.label(frame, 12, 0, "Resolution Override",
+        components.label(frame, 10, 0, "Resolution Override",
                          tooltip="Override the resolution for this concept. Optionally specify multiple resolutions separated by a comma, or a single exact resolution in the format <width>x<height>")
-        components.switch(frame, 12, 2, self.image_ui_state, "enable_resolution_override")
-        components.entry(frame, 12, 3, self.image_ui_state, "resolution_override")
+        components.switch(frame, 10, 2, self.image_ui_state, "enable_resolution_override")
+        components.entry(frame, 10, 3, self.image_ui_state, "resolution_override")
 
         # image
         image_preview, filename_preview, caption_preview = self.__get_preview_image()
@@ -711,7 +698,6 @@ class ConceptWindow(ctk.CTkToplevel):
             random_contrast = RandomContrast(names=['image'], enabled_in_name='enable_random_contrast', fixed_enabled_in_name='enable_fixed_contrast', max_strength_in_name='random_contrast_max_strength')
             random_saturation = RandomSaturation(names=['image'], enabled_in_name='enable_random_saturation', fixed_enabled_in_name='enable_fixed_saturation', max_strength_in_name='random_saturation_max_strength')
             random_hue = RandomHue(names=['image'], enabled_in_name='enable_random_hue', fixed_enabled_in_name='enable_fixed_hue', max_strength_in_name='random_hue_max_strength')
-            random_noise = RandomNoise(names=['image'], enabled_in_name='enable_random_noise', fixed_enabled_in_name='enable_fixed_noise', max_strength_in_name='random_noise_max_strength', min_strength_in_name='random_noise_min_strength')
             drop_tags = DropTags(text_in_name='prompt', enabled_in_name='tag_dropout_enable', probability_in_name='tag_dropout_probability', dropout_mode_in_name='tag_dropout_mode',
                                 special_tags_in_name='tag_dropout_special_tags', special_tag_mode_in_name='tag_dropout_special_tags_mode', delimiter_in_name='tag_delimiter',
                                 keep_tags_count_in_name='keep_tags_count', text_out_name='prompt', regex_enabled_in_name='tag_dropout_special_tags_regex')
@@ -730,7 +716,6 @@ class ConceptWindow(ctk.CTkToplevel):
                 random_contrast,
                 random_saturation,
                 random_hue,
-                random_noise,
                 drop_tags,
                 caps_randomize,
                 shuffle_tags,

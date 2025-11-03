@@ -32,11 +32,6 @@ class ConceptImageConfig(BaseConfig):
     enable_fixed_hue: bool
     random_hue_max_strength: float
 
-    enable_random_noise: bool
-    enable_fixed_noise: bool
-    random_noise_max_strength: float
-    random_noise_min_strength: float
-
     enable_resolution_override: bool
     resolution_override: str
 
