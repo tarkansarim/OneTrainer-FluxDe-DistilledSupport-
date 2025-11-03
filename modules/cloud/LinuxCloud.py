@@ -85,8 +85,8 @@ class LinuxCloud(BaseCloud):
         venv_python = f"{onetrainer_dir}/venv/bin/python"
         venv_pip = f"{onetrainer_dir}/venv/bin/pip"
         
-        # Test if mgds can be imported
-        test_cmd = f"cd {shlex.quote(onetrainer_dir)} && {venv_python} -c \"import mgds.MGDS; print('mgds import successful')\" 2>&1"
+        # Test if mgds can be imported (test both core and RandomNoise module)
+        test_cmd = f"cd {shlex.quote(onetrainer_dir)} && {venv_python} -c \"import mgds.MGDS; import mgds.pipelineModules.RandomNoise; print('mgds import successful')\" 2>&1"
         result = self.connection.run(test_cmd, in_stream=False, warn=True, hide='both')
         
         if result.exited == 0:
@@ -155,11 +155,11 @@ class LinuxCloud(BaseCloud):
                 actual_repo_dir = default_repo_path
         
         if not actual_repo_dir:
-            raise RuntimeError(f"OneTrainer directory not found at {config.onetrainer_dir} or {default_repo_path} after clone. Install command: {config.install_cmd}")
+            raise RuntimeError(f"Repository directory not found at {config.onetrainer_dir} or {default_repo_path} after clone. Install command: {config.install_cmd}")
         
         # Update config to use the actual directory that exists (NEVER rename the directory)
         config.onetrainer_dir = actual_repo_dir
-        print(f"Using OneTrainer directory: {actual_repo_dir}")
+        print(f"Using repository directory: {actual_repo_dir}")
         
         # CRITICAL: Always verify and fix git remote
         install_cmd = config.install_cmd
@@ -182,7 +182,7 @@ class LinuxCloud(BaseCloud):
         
         # If remote doesn't match fork URL, set it correctly
         if current_remote and expected_repo_url_normalized not in current_remote_normalized:
-            print(f"Warning: OneTrainer repo remote points to {current_remote}, not the fork. Fixing...")
+            print(f"Warning: Repository remote points to {current_remote}, not the fork. Fixing...")
             fix_remote_cmd = f"{cmd_env_check} && git remote set-url origin {shlex.quote(expected_repo_url)}"
             self.connection.run(fix_remote_cmd, in_stream=False)
             print(f"Set git remote to: {expected_repo_url}")
@@ -193,50 +193,48 @@ class LinuxCloud(BaseCloud):
         #for interactive shells. On RunPod, cuda is missing from $PATH; on vast.ai, python is missing.
         #We cannot pretend to be interactive either, because then vast.ai starts a tmux screen.
         #Add these paths manually:
-        cmd_env = f"export PATH=$PATH:/usr/local/cuda/bin:/venv/main/bin \
-                   && export OT_LAZY_UPDATES=true \
-                   && cd {shlex.quote(config.onetrainer_dir)}"
+        # CRITICAL: DO NOT set OT_LAZY_UPDATES=true before install.sh/update.sh
+        # This would cause prepare_runtime_environment to skip dependency installation
+        # if the git hash hasn't changed, which breaks mgds editable install
+        base_cmd_env = f"export PATH=$PATH:/usr/local/cuda/bin:/venv/main/bin \
+                         && cd {shlex.quote(config.onetrainer_dir)}"
 
         if result.exited == 0:
             if update:
                 # CRITICAL: Ensure we're pulling from the correct fork, not the original repo
                 # Extract the expected repo URL from install_cmd (should be the fork URL)
-                # Parse install_cmd to get the repo URL (e.g., "git clone https://github.com/user/repo.git" or "git clone https://github.com/user/repo")
                 install_cmd = config.install_cmd
-                # Extract URL from install_cmd - match git clone URL patterns
                 url_match = re.search(r'https://github\.com/[^\s/]+/[^\s/]+', install_cmd)
                 if url_match:
                     expected_repo_url = url_match.group(0)
-                    # Ensure it ends with .git for comparison
                     if not expected_repo_url.endswith('.git'):
                         expected_repo_url += '.git'
                 else:
-                    # Fallback: use the default fork URL
                     expected_repo_url = "https://github.com/tarkansarim/OneTrainer-FluxDe-DistilledSupport-.git"
                 
                 # Check current origin remote URL
-                verify_remote_cmd = f"{cmd_env} && (git remote get-url origin 2>/dev/null || echo '')"
+                verify_remote_cmd = f"{base_cmd_env} && (git remote get-url origin 2>/dev/null || echo '')"
                 result = self.connection.run(verify_remote_cmd, in_stream=False, warn=True, hide='both')
-                # Fabric's result object has stdout as a property
                 current_remote = (result.stdout or "").strip()
                 
-                # Normalize current remote for comparison (handle .git suffix)
+                # Normalize for comparison
                 current_remote_normalized = current_remote.rstrip('.git')
                 expected_repo_url_normalized = expected_repo_url.rstrip('.git')
                 
                 # If remote doesn't match fork URL, set it correctly
                 if expected_repo_url_normalized not in current_remote_normalized:
                     if current_remote:
-                        print(f"Warning: OneTrainer repo remote points to {current_remote}, not the fork. Fixing...")
-                    fix_remote_cmd = f"{cmd_env} && git remote set-url origin {shlex.quote(expected_repo_url)}"
+                        print(f"Warning: Repository remote points to {current_remote}, not the fork. Fixing...")
+                    fix_remote_cmd = f"{base_cmd_env} && git remote set-url origin {shlex.quote(expected_repo_url)}"
                     self.connection.run(fix_remote_cmd, in_stream=False)
                     print(f"Set git remote to: {expected_repo_url}")
                 
                 # Update repo and ensure dependencies are installed
-                # Force requirements installation by unsetting OT_LAZY_UPDATES temporarily
-                self.connection.run(cmd_env + " && unset OT_LAZY_UPDATES && ./update.sh", in_stream=False)
+                # CRITICAL: Unset OT_LAZY_UPDATES to force dependency installation
+                self.connection.run(base_cmd_env + " && unset OT_LAZY_UPDATES && ./update.sh", in_stream=False)
         else:
-            self.connection.run(cmd_env + "&& ./install.sh", in_stream=False)
+            # Fresh install: unset OT_LAZY_UPDATES to ensure all dependencies install correctly
+            self.connection.run(base_cmd_env + " && unset OT_LAZY_UPDATES && ./install.sh", in_stream=False)
         
         # Verify mgds can be imported after installation/update
         # This ensures the editable install worked correctly
