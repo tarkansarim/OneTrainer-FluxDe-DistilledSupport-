@@ -111,65 +111,27 @@ class BaseSSHFileSync(BaseFileSync):
         self.download_file(local_file=local,remote_file=remote)
 
     def sync_down_dir(self,local : Path,remote : Path,filter=None):
-        # Always pack directories on remote before downloading for faster transfer
-        try:
-            # Pack directory on remote side
-            remote_archives = self._pack_directory_remote(remote)
-            
-            # If single archive, wrap in list for consistent handling
-            if isinstance(remote_archives, Path):
-                remote_archives = [remote_archives]
-            
-            # Download all archive shards
-            local_archives = []
-            temp_dir = Path(tempfile.gettempdir())
-            
-            for i, remote_archive in enumerate(remote_archives):
-                if len(remote_archives) == 1:
-                    # Single archive: use simple name
-                    unique_id = uuid.uuid4().hex[:8]
-                    local_archive = temp_dir / f"{local.name}_{unique_id}.tar.gz"
-                else:
-                    # Multiple shards: use numbered pattern
-                    unique_id = uuid.uuid4().hex[:8]
-                    local_archive = temp_dir / f"{local.name}_{unique_id}.tar.gz.part{i+1:03d}"
-                local_archives.append(local_archive)
-                
-                print(f"Downloading archive {i+1}/{len(remote_archives)}...")
-                local_archive.parent.mkdir(parents=True, exist_ok=True)
-                self.download_file(local_file=local_archive, remote_file=remote_archive)
-            
-            # Unpack all archives locally
-            self._unpack_archives_local(local_archives, local)
-            
-            # Clean up remote archives and temp directory
-            # Extract temp dir from first archive path
-            if remote_archives:
-                remote_temp_dir = remote_archives[0].parent
-                self.sync_connection.run(f'rm -rf {shlex.quote(remote_temp_dir.as_posix())}', in_stream=False, warn=True)
-            
-            # Clean up local archives
-            for local_archive in local_archives:
-                local_archive.unlink()
-                
-        except Exception as e:
-            # Fall back to file-by-file download if packing fails
-            print(f"Warning: Remote packing failed ({e}), falling back to file-by-file download...")
-            sync_info=self.__get_sync_info(remote)
-            dirs={}
-            for remote_entry in sync_info:
-                local_entry=local / remote_entry.relative_to(remote)
-                if ((filter is not None and not filter(remote_entry))
-                    or not self.__needs_download(local=local_entry,remote=remote_entry,sync_info=sync_info)):
-                    continue
+        # Use incremental file-by-file download to respect filters and change detection
+        # Packing would download everything, breaking incremental sync and filter logic
+        # The original incremental method ensures:
+        # - Only files matching the filter are downloaded (e.g., download_saves, download_backups)
+        # - Only new/changed files are downloaded (__needs_download checks)
+        # - Saves/backups download incrementally as they're created on remote
+        sync_info=self.__get_sync_info(remote)
+        dirs={}
+        for remote_entry in sync_info:
+            local_entry=local / remote_entry.relative_to(remote)
+            if ((filter is not None and not filter(remote_entry))
+                or not self.__needs_download(local=local_entry,remote=remote_entry,sync_info=sync_info)):
+                continue
 
-                if local_entry.parent not in dirs:
-                    dirs[local_entry.parent]=[]
-                dirs[local_entry.parent].append(remote_entry)
+            if local_entry.parent not in dirs:
+                dirs[local_entry.parent]=[]
+            dirs[local_entry.parent].append(remote_entry)
 
-            for dir,files in dirs.items():
-                dir.mkdir(parents=True,exist_ok=True)
-                self.download_files(local_dir=dir,remote_files=files)
+        for dir,files in dirs.items():
+            dir.mkdir(parents=True,exist_ok=True)
+            self.download_files(local_dir=dir,remote_files=files)
 
 
     def __get_sync_info(self,remote : Path):

@@ -1,4 +1,5 @@
 import json
+import shlex
 from abc import ABCMeta, abstractmethod
 from pathlib import Path
 
@@ -28,9 +29,33 @@ class BaseCloud(metaclass=ABCMeta):
     def download_output_model(self):
         local=Path(self.config.local_output_model_destination)
         remote=Path(self.config.output_model_destination)
-        self.file_sync.sync_down_file(local=local,remote=remote)
-        self.file_sync.sync_down_dir(local=local.with_suffix(local.suffix+"_embeddings"),
-                           remote=remote.with_suffix(remote.suffix+"_embeddings"))
+        
+        # Check if remote file exists before attempting download
+        # The remote path may not exist if the model was saved to a different location
+        # (e.g., workspace/save/ instead of models/)
+        try:
+            self.file_sync.sync_connection.open()
+            check_cmd = f'test -f {shlex.quote(remote.as_posix())} && echo "exists" || echo "missing"'
+            result = self.file_sync.sync_connection.run(check_cmd, in_stream=False, warn=True, hide='both')
+            if "exists" in (result.stdout or ""):
+                self.file_sync.sync_down_file(local=local,remote=remote)
+            else:
+                print(f"Warning: Output model not found at remote path {remote.as_posix()}. "
+                      f"It may have been saved to a different location (e.g., workspace/save/).")
+        except Exception as e:
+            print(f"Warning: Could not check remote output model path: {e}")
+            # Try downloading anyway, sync_down_file will handle errors gracefully
+        
+        # Check embeddings directory
+        embeddings_remote = remote.with_suffix(remote.suffix+"_embeddings")
+        try:
+            check_cmd = f'test -d {shlex.quote(embeddings_remote.as_posix())} && echo "exists" || echo "missing"'
+            result = self.file_sync.sync_connection.run(check_cmd, in_stream=False, warn=True, hide='both')
+            if "exists" in (result.stdout or ""):
+                self.file_sync.sync_down_dir(local=local.with_suffix(local.suffix+"_embeddings"),
+                                   remote=embeddings_remote)
+        except Exception as e:
+            print(f"Warning: Could not check remote embeddings directory: {e}")
 
     def upload_config(self,commands : TrainCommands=None):
         local_config_path=Path(self.config.local_workspace_dir,f"remote_config-{get_string_timestamp()}.json")
