@@ -1615,6 +1615,89 @@ def create_noise_scheduler(
 
     return scheduler
 
+def _set_remote_paths(config: TrainConfig):
+    """
+    Set paths to remote paths when cloud is enabled.
+    This ensures that paths are converted to remote values when cloud training starts.
+    """
+    if not config.cloud.enabled:
+        # Don't set remote paths if cloud is disabled
+        return
+    
+    def is_remote_path(path: str) -> bool:
+        """Check if a path looks like a remote cloud path."""
+        if not path:
+            return False
+        path_lower = path.lower()
+        # Check for common remote path patterns
+        return (path.startswith("/workspace") or 
+                "/remote/" in path_lower or
+                path.startswith("/tmp") or
+                (path.startswith("/") and "workspace" in path_lower))
+    
+    def adjust_path(config_obj, attribute: str, if_exists: bool = False):
+        """Convert local path to remote path, saving original in local_* attribute."""
+        current_value = getattr(config_obj, attribute, "")
+        
+        # Skip if empty
+        if not current_value:
+            return
+        
+        # Skip if path starts with "cloud:" (special marker) - remove marker and return
+        if current_value.startswith("cloud:"):
+            setattr(config_obj, attribute, current_value.replace("cloud:", "", 1))
+            return
+        
+        # Skip if already remote
+        if is_remote_path(current_value):
+            return
+        
+        # Skip if if_exists=True and path doesn't exist locally
+        if if_exists:
+            try:
+                if not Path(current_value).exists():
+                    return
+            except Exception:
+                return
+        
+        # Save original path to local_* attribute (unless already set)
+        local_attr = "local_" + attribute
+        if not hasattr(config_obj, local_attr) or not getattr(config_obj, local_attr, ""):
+            setattr(config_obj, local_attr, current_value)
+        
+        # Convert to remote path using same logic as CloudTrainer.__adjust_path
+        remote_dir = config.cloud.remote_dir
+        if remote_dir:
+            path = Path(current_value)
+            if path.is_absolute():
+                # Remove Windows drive letter if present (e.g., "C:" -> "")
+                path = path.relative_to(path.anchor)
+            # Use same pattern as CloudTrainer: remote_dir/remote/path
+            remote_path = (Path(remote_dir, "remote") / path).as_posix()
+            setattr(config_obj, attribute, remote_path)
+    
+    # Adjust top-level paths
+    adjust_path(config, "debug_dir")
+    adjust_path(config, "workspace_dir")
+    adjust_path(config, "cache_dir")
+    adjust_path(config, "base_model_name", if_exists=True)
+    adjust_path(config, "output_model_destination")
+    adjust_path(config, "lora_model_name")
+    
+    # Adjust nested paths
+    adjust_path(config.prior, "model_name", if_exists=True)
+    adjust_path(config.embedding, "model_name")
+    
+    for add_embedding in config.additional_embeddings:
+        adjust_path(add_embedding, "model_name")
+    
+    # Adjust concept paths
+    if config.concepts is not None:
+        for concept in config.concepts:
+            adjust_path(concept, "path", if_exists=True)
+            adjust_path(concept.text, "prompt_path")
+
+
 def _restore_local_paths(config: TrainConfig):
     """
     Restore local paths from local_* attributes when cloud is disabled.
