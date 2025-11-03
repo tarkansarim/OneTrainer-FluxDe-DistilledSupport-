@@ -85,8 +85,8 @@ class LinuxCloud(BaseCloud):
         venv_python = f"{onetrainer_dir}/venv/bin/python"
         venv_pip = f"{onetrainer_dir}/venv/bin/pip"
         
-        # Test if mgds can be imported (test both core and RandomNoise module)
-        test_cmd = f"cd {shlex.quote(onetrainer_dir)} && {venv_python} -c \"import mgds.MGDS; import mgds.pipelineModules.RandomNoise; print('mgds import successful')\" 2>&1"
+        # Test if mgds can be imported
+        test_cmd = f"cd {shlex.quote(onetrainer_dir)} && {venv_python} -c \"import mgds.MGDS; print('mgds import successful')\" 2>&1"
         result = self.connection.run(test_cmd, in_stream=False, warn=True, hide='both')
         
         if result.exited == 0:
@@ -108,9 +108,10 @@ class LinuxCloud(BaseCloud):
         
         # Import failed, attempt to reinstall mgds
         print("Warning: mgds not importable, attempting reinstall...")
-        # Remove the existing git clone directory to force a fresh checkout of master
-        # Uninstall first, then remove the source directory, then reinstall to ensure we get master branch
-        reinstall_cmd = f"cd {shlex.quote(onetrainer_dir)} && {venv_pip} uninstall -y mgds && rm -rf venv/src/mgds && {venv_pip} install --upgrade --force-reinstall --no-cache-dir -e git+https://github.com/Nerogar/mgds.git@master#egg=mgds"
+        # Remove the existing git clone directory to force a fresh checkout
+        # Uninstall first, then remove the source directory, then reinstall
+        # Use the same commit as original OneTrainer (50a2394)
+        reinstall_cmd = f"cd {shlex.quote(onetrainer_dir)} && {venv_pip} uninstall -y mgds && rm -rf venv/src/mgds && {venv_pip} install --upgrade --force-reinstall --no-cache-dir -e git+https://github.com/Nerogar/mgds.git@50a2394#egg=mgds"
         self.connection.run(reinstall_cmd, in_stream=False, warn=True)
         
         # Verify import again after reinstall

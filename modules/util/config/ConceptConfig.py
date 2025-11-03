@@ -32,11 +32,6 @@ class ConceptImageConfig(BaseConfig):
     enable_fixed_hue: bool
     random_hue_max_strength: float
 
-    enable_random_noise: bool
-    enable_fixed_noise: bool
-    random_noise_max_strength: float
-    random_noise_min_strength: float
-
     enable_resolution_override: bool
     resolution_override: str
 
@@ -75,11 +70,6 @@ class ConceptImageConfig(BaseConfig):
         data.append(("enable_random_hue", False, bool, False))
         data.append(("enable_fixed_hue", False, bool, False))
         data.append(("random_hue_max_strength", 0.0, float, False))
-
-        data.append(("enable_random_noise", False, bool, False))
-        data.append(("enable_fixed_noise", False, bool, False))
-        data.append(("random_noise_max_strength", 0.0, float, False))
-        data.append(("random_noise_min_strength", 0.0, float, False))
 
         data.append(("enable_resolution_override", False, bool, False))
         data.append(("resolution_override", "512", str, False))
