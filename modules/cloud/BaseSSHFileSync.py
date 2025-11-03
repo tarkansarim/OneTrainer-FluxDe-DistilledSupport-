@@ -410,7 +410,7 @@ class BaseSSHFileSync(BaseFileSync):
                         
                         # Create shard for this large item
                         remote_archive = remote_temp_dir / f"{remote_dir.name}.tar.gz.part{shard_num:03d}"
-                        cmd = f'cd {shlex.quote(remote_dir.parent.as_posix())} && tar -czf {shlex.quote(remote_archive.as_posix())} -C {shlex.quote(remote_dir.as_posix())} {shlex.quote(item_name)}'
+                        cmd = f'cd {shlex.quote(remote_dir.as_posix())} && tar -czf {shlex.quote(remote_archive.as_posix())} {shlex.quote(item_name)}'
                         self.sync_connection.run(cmd, in_stream=False)
                         remote_archives.append(remote_archive)
                         shard_num += 1
