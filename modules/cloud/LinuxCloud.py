@@ -86,15 +86,30 @@ class LinuxCloud(BaseCloud):
         venv_pip = f"{onetrainer_dir}/venv/bin/pip"
         
         # Test if mgds can be imported
-        test_cmd = f"cd {shlex.quote(onetrainer_dir)} && {venv_python} -c \"import mgds.pipelineModules.RandomNoise; print('mgds import successful')\""
+        test_cmd = f"cd {shlex.quote(onetrainer_dir)} && {venv_python} -c \"import mgds.pipelineModules.RandomNoise; print('mgds import successful')\" 2>&1"
         result = self.connection.run(test_cmd, in_stream=False, warn=True, hide='both')
         
         if result.exited == 0:
             return True
         
+        # Capture error output for debugging
+        error_output = (result.stdout or "") + (result.stderr or "")
+        print(f"mgds import failed: {error_output}")
+        
+        # Check if editable install files exist
+        check_pth_cmd = f"cd {shlex.quote(onetrainer_dir)} && ls -la venv/lib/python*/site-packages/*.pth 2>/dev/null | grep mgds || echo 'no mgds pth found'"
+        pth_result = self.connection.run(check_pth_cmd, in_stream=False, warn=True, hide='both')
+        print(f"mgds .pth check: {pth_result.stdout}")
+        
+        # Check if source directory exists
+        check_src_cmd = f"test -d {onetrainer_dir}/venv/src/mgds && echo 'mgds src exists' || echo 'mgds src missing'"
+        src_result = self.connection.run(check_src_cmd, in_stream=False, warn=True, hide='both')
+        print(f"mgds source: {src_result.stdout}")
+        
         # Import failed, attempt to reinstall mgds
         print("Warning: mgds not importable, attempting reinstall...")
-        reinstall_cmd = f"cd {shlex.quote(onetrainer_dir)} && {venv_pip} install --upgrade --force-reinstall --no-deps -e git+https://github.com/Nerogar/mgds.git@50a2394#egg=mgds"
+        # Uninstall first for clean reinstall, then reinstall without --no-deps to ensure dependencies
+        reinstall_cmd = f"cd {shlex.quote(onetrainer_dir)} && {venv_pip} uninstall -y mgds && {venv_pip} install --upgrade --force-reinstall -e git+https://github.com/Nerogar/mgds.git@50a2394#egg=mgds"
         self.connection.run(reinstall_cmd, in_stream=False, warn=True)
         
         # Verify import again after reinstall
@@ -103,7 +118,8 @@ class LinuxCloud(BaseCloud):
             print("mgds reinstall successful")
             return True
         else:
-            print("Warning: mgds reinstall failed or still not importable")
+            error_output = (result.stdout or "") + (result.stderr or "")
+            print(f"Warning: mgds reinstall failed or still not importable: {error_output}")
             return False
 
     def _install_onetrainer(self, update: bool=False):
