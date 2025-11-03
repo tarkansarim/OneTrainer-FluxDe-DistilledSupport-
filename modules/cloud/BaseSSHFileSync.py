@@ -1,3 +1,4 @@
+import os
 import shlex
 import tarfile
 import tempfile
@@ -49,26 +50,40 @@ class BaseSSHFileSync(BaseFileSync):
     def sync_up_dir(self,local : Path,remote: Path,recursive: bool,sync_info=None):
         # Always pack directories for faster upload
         try:
-            # Create tar.gz archive locally
-            archive_path = self._pack_directory(local, recursive)
+            # Create tar.gz archive(s) locally (may be sharded if very large)
+            archive_paths = self._pack_directory(local, recursive)
             
-            # Upload the archive to a temporary location on remote
-            remote_archive = remote.parent / f"{remote.name}.tar.gz"
+            # If single archive, wrap in list for consistent handling
+            if isinstance(archive_paths, Path):
+                archive_paths = [archive_paths]
             
             self.sync_connection.open()
             self.sync_connection.run(f'mkdir -p {shlex.quote(remote.parent.as_posix())}',in_stream=False)
             
-            # Upload the archive
-            self.upload_file(local_file=archive_path, remote_file=remote_archive)
+            # Upload all archive shards
+            remote_archives = []
+            for i, archive_path in enumerate(archive_paths):
+                if len(archive_paths) == 1:
+                    # Single archive: use simple name
+                    remote_archive = remote.parent / f"{remote.name}.tar.gz"
+                else:
+                    # Multiple shards: use numbered pattern
+                    remote_archive = remote.parent / f"{remote.name}.tar.gz.part{i+1:03d}"
+                remote_archives.append(remote_archive)
+                
+                print(f"Uploading archive {i+1}/{len(archive_paths)} ({archive_path.stat().st_size / (1024*1024):.1f} MB)...")
+                self.upload_file(local_file=archive_path, remote_file=remote_archive)
             
-            # Unpack archive on remote and move to final location
-            self._unpack_archive(remote_archive, remote, recursive)
+            # Unpack all archives on remote
+            self._unpack_archives(remote_archives, remote, recursive)
             
-            # Clean up remote archive
-            self.sync_connection.run(f'rm -f {shlex.quote(remote_archive.as_posix())}', in_stream=False, warn=True)
+            # Clean up remote archives
+            for remote_archive in remote_archives:
+                self.sync_connection.run(f'rm -f {shlex.quote(remote_archive.as_posix())}', in_stream=False, warn=True)
             
-            # Clean up local archive
-            archive_path.unlink()
+            # Clean up local archives
+            for archive_path in archive_paths:
+                archive_path.unlink()
             
         except Exception as e:
             # Fall back to file-by-file upload if packing fails
@@ -143,47 +158,144 @@ class BaseSSHFileSync(BaseFileSync):
             or local.stat().st_mtime < sync_info[remote]['mtime']
         )
 
-    def _pack_directory(self, local_dir: Path, recursive: bool) -> Path:
+    def _get_directory_size(self, local_dir: Path) -> int:
         """
-        Pack a directory into a tar.gz archive.
+        Calculate total size of directory in bytes.
+        
+        Args:
+            local_dir: Directory to calculate size for
+            
+        Returns:
+            Total size in bytes
+        """
+        total_size = 0
+        for dirpath, dirnames, filenames in os.walk(local_dir):
+            for filename in filenames:
+                filepath = Path(dirpath) / filename
+                try:
+                    total_size += filepath.stat().st_size
+                except (OSError, FileNotFoundError):
+                    # Skip files that can't be accessed
+                    pass
+        return total_size
+
+    def _pack_directory(self, local_dir: Path, recursive: bool) -> Path | list[Path]:
+        """
+        Pack a directory into one or more tar.gz archives (sharded if large).
         
         Args:
             local_dir: Local directory to pack
             recursive: Whether to include subdirectories (ignored, always recursive)
             
         Returns:
-            Path to the created archive file
+            Path to single archive file, or list of Paths if sharded
         """
-        # Create temporary archive file with unique name to avoid conflicts
+        # Shard size threshold: 2GB per archive
+        SHARD_SIZE_THRESHOLD = 2 * 1024 * 1024 * 1024  # 2GB
+        
+        # Get all files to pack
+        all_files = []
+        for item in local_dir.iterdir():
+            all_files.append(item)
+        
+        if not all_files:
+            # Empty directory - create empty archive
+            temp_dir = Path(tempfile.gettempdir())
+            unique_id = uuid.uuid4().hex[:8]
+            archive_name = f"{local_dir.name}_{unique_id}.tar.gz"
+            archive_path = temp_dir / archive_name
+            with tarfile.open(archive_path, 'w:gz') as tar:
+                pass  # Create empty archive
+            return archive_path
+        
+        # Calculate total size to decide if sharding is needed
+        total_size = self._get_directory_size(local_dir)
+        
+        # If total size is below threshold, create single archive
+        if total_size < SHARD_SIZE_THRESHOLD:
+            temp_dir = Path(tempfile.gettempdir())
+            unique_id = uuid.uuid4().hex[:8]
+            archive_name = f"{local_dir.name}_{unique_id}.tar.gz"
+            archive_path = temp_dir / archive_name
+            
+            with tarfile.open(archive_path, 'w:gz') as tar:
+                for item in all_files:
+                    tar.add(item, arcname=item.name, recursive=True)
+            
+            return archive_path
+        
+        # Sharding needed: split files across multiple archives
+        print(f"Directory size ({total_size / (1024*1024*1024):.2f} GB) exceeds threshold, creating sharded archives...")
         temp_dir = Path(tempfile.gettempdir())
         unique_id = uuid.uuid4().hex[:8]
-        archive_name = f"{local_dir.name}_{unique_id}.tar.gz"
-        archive_path = temp_dir / archive_name
+        archive_paths = []
         
-        # Create tar.gz archive
-        # Add directory contents with relative paths so extraction works correctly
-        with tarfile.open(archive_path, 'w:gz') as tar:
-            # Add all files and subdirectories, but strip the parent directory name
-            # so contents extract directly to target, not into a subdirectory
-            for item in local_dir.iterdir():
-                # Use the item name as arcname so it goes directly into target directory
-                tar.add(item, arcname=item.name, recursive=True)
+        current_shard = []
+        current_shard_size = 0
+        shard_num = 1
         
-        return archive_path
+        def create_shard(shard_files):
+            """Create a single archive shard from a list of files."""
+            archive_name = f"{local_dir.name}_{unique_id}.tar.gz.part{shard_num:03d}"
+            archive_path = temp_dir / archive_name
+            with tarfile.open(archive_path, 'w:gz') as tar:
+                for item in shard_files:
+                    tar.add(item, arcname=item.name, recursive=True)
+            return archive_path
+        
+        for item in all_files:
+            # Get item size (for directories, use directory size)
+            if item.is_file():
+                item_size = item.stat().st_size
+            else:
+                item_size = self._get_directory_size(item)
+            
+            # If single item exceeds threshold, put it in its own shard
+            if item_size >= SHARD_SIZE_THRESHOLD:
+                # Save current shard if it has files
+                if current_shard:
+                    archive_paths.append(create_shard(current_shard))
+                    shard_num += 1
+                    current_shard = []
+                    current_shard_size = 0
+                
+                # Create shard for this large item
+                archive_paths.append(create_shard([item]))
+                shard_num += 1
+            elif current_shard_size + item_size > SHARD_SIZE_THRESHOLD:
+                # Current shard would exceed threshold, create it and start new one
+                archive_paths.append(create_shard(current_shard))
+                shard_num += 1
+                current_shard = [item]
+                current_shard_size = item_size
+            else:
+                # Add to current shard
+                current_shard.append(item)
+                current_shard_size += item_size
+        
+        # Create final shard if it has files
+        if current_shard:
+            archive_paths.append(create_shard(current_shard))
+        
+        print(f"Created {len(archive_paths)} archive shard(s)")
+        return archive_paths
 
-    def _unpack_archive(self, remote_archive: Path, remote_target: Path, recursive: bool):
+    def _unpack_archives(self, remote_archives: list[Path], remote_target: Path, recursive: bool):
         """
-        Unpack a tar.gz archive on the remote side.
+        Unpack one or more tar.gz archives on the remote side.
         
         Args:
-            remote_archive: Path to the archive on remote
+            remote_archives: List of archive paths on remote (or single archive will be wrapped)
             remote_target: Target directory where contents should be extracted
             recursive: Whether recursive unpacking (ignored, always recursive)
         """
         # Ensure target directory exists
         self.sync_connection.run(f'mkdir -p {shlex.quote(remote_target.as_posix())}', in_stream=False)
         
-        # Extract archive contents directly to target directory
-        # Using -C to extract to target directory
-        cmd = f'tar -xzf {shlex.quote(remote_archive.as_posix())} -C {shlex.quote(remote_target.as_posix())}'
-        self.sync_connection.run(cmd, in_stream=False)
+        # Extract all archives in order
+        for i, remote_archive in enumerate(remote_archives):
+            print(f"Extracting archive {i+1}/{len(remote_archives)}...")
+            # Extract archive contents directly to target directory
+            # Using -C to extract to target directory
+            cmd = f'tar -xzf {shlex.quote(remote_archive.as_posix())} -C {shlex.quote(remote_target.as_posix())}'
+            self.sync_connection.run(cmd, in_stream=False)
