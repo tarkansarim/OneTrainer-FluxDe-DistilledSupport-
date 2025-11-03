@@ -109,7 +109,8 @@ class LinuxCloud(BaseCloud):
         # Import failed, attempt to reinstall mgds
         print("Warning: mgds not importable, attempting reinstall...")
         # Uninstall first for clean reinstall, then reinstall without --no-deps to ensure dependencies
-        reinstall_cmd = f"cd {shlex.quote(onetrainer_dir)} && {venv_pip} uninstall -y mgds && {venv_pip} install --upgrade --force-reinstall -e git+https://github.com/Nerogar/mgds.git@50a2394#egg=mgds"
+        # Use main branch to ensure RandomNoise module is available
+        reinstall_cmd = f"cd {shlex.quote(onetrainer_dir)} && {venv_pip} uninstall -y mgds && {venv_pip} install --upgrade --force-reinstall -e git+https://github.com/Nerogar/mgds.git@main#egg=mgds"
         self.connection.run(reinstall_cmd, in_stream=False, warn=True)
         
         # Verify import again after reinstall
