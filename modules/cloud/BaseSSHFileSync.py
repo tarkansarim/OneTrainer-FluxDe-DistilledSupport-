@@ -234,9 +234,9 @@ class BaseSSHFileSync(BaseFileSync):
         current_shard_size = 0
         shard_num = 1
         
-        def create_shard(shard_files):
+        def create_shard(shard_files, num):
             """Create a single archive shard from a list of files."""
-            archive_name = f"{local_dir.name}_{unique_id}.tar.gz.part{shard_num:03d}"
+            archive_name = f"{local_dir.name}_{unique_id}.tar.gz.part{num:03d}"
             archive_path = temp_dir / archive_name
             with tarfile.open(archive_path, 'w:gz') as tar:
                 for item in shard_files:
@@ -254,17 +254,17 @@ class BaseSSHFileSync(BaseFileSync):
             if item_size >= SHARD_SIZE_THRESHOLD:
                 # Save current shard if it has files
                 if current_shard:
-                    archive_paths.append(create_shard(current_shard))
+                    archive_paths.append(create_shard(current_shard, shard_num))
                     shard_num += 1
                     current_shard = []
                     current_shard_size = 0
                 
                 # Create shard for this large item
-                archive_paths.append(create_shard([item]))
+                archive_paths.append(create_shard([item], shard_num))
                 shard_num += 1
             elif current_shard_size + item_size > SHARD_SIZE_THRESHOLD:
                 # Current shard would exceed threshold, create it and start new one
-                archive_paths.append(create_shard(current_shard))
+                archive_paths.append(create_shard(current_shard, shard_num))
                 shard_num += 1
                 current_shard = [item]
                 current_shard_size = item_size
@@ -275,7 +275,7 @@ class BaseSSHFileSync(BaseFileSync):
         
         # Create final shard if it has files
         if current_shard:
-            archive_paths.append(create_shard(current_shard))
+            archive_paths.append(create_shard(current_shard, shard_num))
         
         print(f"Created {len(archive_paths)} archive shard(s)")
         return archive_paths
