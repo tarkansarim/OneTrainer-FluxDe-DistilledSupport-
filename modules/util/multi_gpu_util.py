@@ -126,15 +126,24 @@ def parameter_divergence(params: list[torch.Tensor], train_device: torch.device)
     if not is_enabled():
         return 0.0
 
-    diff = 0.0
-    for param in params:
-        param_list = [torch.zeros_like(param, device=train_device) for _ in range(world_size())] if is_master() else None
-        torch.distributed.gather(param.to(train_device), param_list, dst=0)
-        if is_master():
-            for r in range(1, world_size()):
-                diff += torch.sum(torch.abs(param_list[0] - param_list[r]))
+    world = world_size()
+    total_diff = torch.zeros(1, device=train_device, dtype=torch.float64)
 
-    return diff if is_master() else None
+    for param in params:
+        param_on_device = param.detach()
+        if param_on_device.device != train_device:
+            param_on_device = param_on_device.to(train_device)
+
+        param_fp32 = param_on_device.to(torch.float32)
+        mean_param = param_fp32.clone()
+        torch.distributed.all_reduce(mean_param, op=torch.distributed.ReduceOp.SUM)
+        mean_param /= world
+
+        diff_param = torch.sum(torch.abs(param_fp32 - mean_param), dtype=torch.float64)
+        torch.distributed.all_reduce(diff_param, op=torch.distributed.ReduceOp.SUM)
+        total_diff += diff_param
+
+    return total_diff.item() if is_master() else None
 
 @torch.no_grad()
 def warn_parameter_divergence(params: list[torch.Tensor], train_device: torch.device):

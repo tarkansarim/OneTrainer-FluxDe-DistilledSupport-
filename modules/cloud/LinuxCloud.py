@@ -290,7 +290,13 @@ class LinuxCloud(BaseCloud):
         self._verify_mgds_import(config.onetrainer_dir)
 
         cmd="export PATH=$PATH:/usr/local/cuda/bin:/venv/main/bin \
-             && export PYTHONUNBUFFERED=1"
+             && export PYTHONUNBUFFERED=1 \
+             && export CUDA_LAUNCH_BLOCKING=${CUDA_LAUNCH_BLOCKING:-1} \
+             && export NCCL_DEBUG=${NCCL_DEBUG:-INFO} \
+             && export NCCL_P2P_DISABLE=${NCCL_P2P_DISABLE:-1} \
+             && export TORCH_NCCL_ASYNC_ERROR_HANDLING=${TORCH_NCCL_ASYNC_ERROR_HANDLING:-1} \
+             && export NCCL_ASYNC_ERROR_HANDLING=${NCCL_ASYNC_ERROR_HANDLING:-1} \
+             && export TORCH_SHOW_CPP_STACKTRACES=${TORCH_SHOW_CPP_STACKTRACES:-1}"
 
         if self.config.secrets.huggingface_token != "":
             cmd+=f" && export HF_TOKEN={self.config.secrets.huggingface_token}"

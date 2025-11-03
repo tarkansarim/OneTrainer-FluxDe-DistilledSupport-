@@ -793,15 +793,6 @@ class TrainUI(ctk.CTk):
         if self.training_thread is None:
             self.save_default()
             
-            # Update paths based on cloud enabled state
-            from modules.util import create
-            if self.train_config.cloud.enabled:
-                # Set paths to remote when cloud is enabled
-                create._set_remote_paths(self.train_config)
-            else:
-                # Reset paths to local when cloud is disabled
-                create._restore_local_paths(self.train_config)
-            
             # Update UI state to reflect the current paths
             if hasattr(self.train_config, "output_model_destination"):
                 self.ui_state.get_var("output_model_destination").set(self.train_config.output_model_destination)
