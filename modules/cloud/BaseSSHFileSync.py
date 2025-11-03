@@ -1,6 +1,7 @@
 import shlex
 import tarfile
 import tempfile
+import uuid
 from abc import abstractmethod
 from pathlib import Path
 
@@ -153,9 +154,10 @@ class BaseSSHFileSync(BaseFileSync):
         Returns:
             Path to the created archive file
         """
-        # Create temporary archive file
+        # Create temporary archive file with unique name to avoid conflicts
         temp_dir = Path(tempfile.gettempdir())
-        archive_name = f"{local_dir.name}.tar.gz"
+        unique_id = uuid.uuid4().hex[:8]
+        archive_name = f"{local_dir.name}_{unique_id}.tar.gz"
         archive_path = temp_dir / archive_name
         
         # Create tar.gz archive
