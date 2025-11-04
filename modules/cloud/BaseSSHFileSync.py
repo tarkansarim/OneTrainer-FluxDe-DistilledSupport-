@@ -134,7 +134,7 @@ class BaseSSHFileSync(BaseFileSync):
         with tempfile.TemporaryDirectory() as tmpdir:
             tmpdir_path=Path(tmpdir)
             list_file=tmpdir_path / "files.txt"
-            with list_file.open('w', encoding='utf-8') as f:
+            with list_file.open('w', encoding='utf-8', newline='\n') as f:
                 for relative_path in files_to_fetch:
                     f.write(relative_path.as_posix())
                     f.write('\n')
