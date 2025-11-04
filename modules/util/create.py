@@ -1,5 +1,6 @@
 import ast
 import importlib
+import os
 from collections.abc import Iterable
 from pathlib import Path
 
@@ -1703,6 +1704,9 @@ def _restore_local_paths(config: TrainConfig):
     Restore local paths from local_* attributes when cloud is disabled.
     This ensures that paths are reset to local values after cloud training.
     """
+    if os.environ.get("OT_REMOTE_SKIP_PATH_RESTORE") == "1":
+        return
+
     if config.cloud.enabled:
         # Don't restore if cloud is still enabled
         return

@@ -67,6 +67,14 @@ def main():
     train_config = TrainConfig.default_values()
     with open(args.config_path, "r") as f:
         train_config.from_dict(json.load(f))
+
+    os.environ["OT_REMOTE_SKIP_PATH_RESTORE"] = "1"
+
+    for attr in ("workspace_dir", "cache_dir", "debug_dir"):
+        value = getattr(train_config, attr, "")
+        if value:
+            os.makedirs(value, exist_ok=True)
+
     train_config.cloud.enabled=False
 
     try:
