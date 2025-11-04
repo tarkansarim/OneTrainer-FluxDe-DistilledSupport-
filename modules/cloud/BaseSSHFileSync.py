@@ -111,27 +111,60 @@ class BaseSSHFileSync(BaseFileSync):
         self.download_file(local_file=local,remote_file=remote)
 
     def sync_down_dir(self,local : Path,remote : Path,filter=None):
-        # Use incremental file-by-file download to respect filters and change detection
-        # Packing would download everything, breaking incremental sync and filter logic
-        # The original incremental method ensures:
-        # - Only files matching the filter are downloaded (e.g., download_saves, download_backups)
-        # - Only new/changed files are downloaded (__needs_download checks)
-        # - Saves/backups download incrementally as they're created on remote
         sync_info=self.__get_sync_info(remote)
-        dirs={}
+        files_to_fetch=[]
         for remote_entry in sync_info:
-            local_entry=local / remote_entry.relative_to(remote)
-            if ((filter is not None and not filter(remote_entry))
-                or not self.__needs_download(local=local_entry,remote=remote_entry,sync_info=sync_info)):
+            try:
+                relative_path=remote_entry.relative_to(remote)
+            except ValueError:
                 continue
 
-            if local_entry.parent not in dirs:
-                dirs[local_entry.parent]=[]
-            dirs[local_entry.parent].append(remote_entry)
+            local_entry=local / relative_path
+            if filter is not None and not filter(remote_entry):
+                continue
+            if not self.__needs_download(local=local_entry,remote=remote_entry,sync_info=sync_info):
+                continue
+            files_to_fetch.append(relative_path)
 
-        for dir,files in dirs.items():
-            dir.mkdir(parents=True,exist_ok=True)
-            self.download_files(local_dir=dir,remote_files=files)
+        if not files_to_fetch:
+            return
+
+        local.mkdir(parents=True,exist_ok=True)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmpdir_path=Path(tmpdir)
+            list_file=tmpdir_path / "files.txt"
+            with list_file.open('w', encoding='utf-8') as f:
+                for relative_path in files_to_fetch:
+                    f.write(relative_path.as_posix())
+                    f.write('\n')
+
+            remote_tmp_dir=Path('/tmp') / f"onetrainer_sync_{uuid.uuid4().hex}"
+            remote_list_file=remote_tmp_dir / 'files.txt'
+            remote_archive_file=remote_tmp_dir / 'archive.tar.gz'
+
+            self.sync_connection.open()
+            self.sync_connection.run(f'mkdir -p {shlex.quote(remote_tmp_dir.as_posix())}', in_stream=False)
+
+            self.upload_file(local_file=list_file,remote_file=remote_list_file)
+
+            pack_cmd=(
+                f'tar -czf {shlex.quote(remote_archive_file.as_posix())} '
+                f'-C {shlex.quote(remote.as_posix())} '
+                f'-T {shlex.quote(remote_list_file.as_posix())}'
+            )
+            self.sync_connection.run(pack_cmd, in_stream=False)
+
+            local_archive_path=tmpdir_path / remote_archive_file.name
+            self.download_file(local_file=local_archive_path,remote_file=remote_archive_file)
+
+            with tarfile.open(local_archive_path, 'r:gz') as archive:
+                archive.extractall(path=local)
+
+            if local_archive_path.exists():
+                local_archive_path.unlink()
+
+            self.sync_connection.run(f'rm -rf {shlex.quote(remote_tmp_dir.as_posix())}', in_stream=False, warn=True)
 
 
     def __get_sync_info(self,remote : Path):
