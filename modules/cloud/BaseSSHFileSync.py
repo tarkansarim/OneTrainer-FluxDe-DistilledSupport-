@@ -4,6 +4,7 @@ import tarfile
 import tempfile
 import uuid
 from abc import abstractmethod
+from contextlib import suppress
 from pathlib import Path
 
 from modules.cloud.BaseFileSync import BaseFileSync
@@ -131,6 +132,11 @@ class BaseSSHFileSync(BaseFileSync):
 
         local.mkdir(parents=True,exist_ok=True)
 
+        remote_tmp_dir=remote / f".onetrainer_sync_{uuid.uuid4().hex}"
+        remote_list_file=remote_tmp_dir / 'files.txt'
+        remote_archive_file=remote_tmp_dir / 'archive.tar.gz'
+        local_archive_path=None
+
         with tempfile.TemporaryDirectory() as tmpdir:
             tmpdir_path=Path(tmpdir)
             list_file=tmpdir_path / "files.txt"
@@ -139,32 +145,66 @@ class BaseSSHFileSync(BaseFileSync):
                     f.write(relative_path.as_posix())
                     f.write('\n')
 
-            remote_tmp_dir=Path('/tmp') / f"onetrainer_sync_{uuid.uuid4().hex}"
-            remote_list_file=remote_tmp_dir / 'files.txt'
-            remote_archive_file=remote_tmp_dir / 'archive.tar.gz'
+            success=True
+            error=None
 
-            self.sync_connection.open()
-            self.sync_connection.run(f'mkdir -p {shlex.quote(remote_tmp_dir.as_posix())}', in_stream=False)
+            try:
+                self.sync_connection.open()
+                self.sync_connection.run(f'mkdir -p {shlex.quote(remote_tmp_dir.as_posix())}', in_stream=False)
 
-            self.upload_file(local_file=list_file,remote_file=remote_list_file)
+                self.upload_file(local_file=list_file,remote_file=remote_list_file)
 
-            pack_cmd=(
-                f'tar -czf {shlex.quote(remote_archive_file.as_posix())} '
-                f'-C {shlex.quote(remote.as_posix())} '
-                f'-T {shlex.quote(remote_list_file.as_posix())}'
-            )
-            self.sync_connection.run(pack_cmd, in_stream=False)
+                pack_cmd=(
+                    f'tar -czf {shlex.quote(remote_archive_file.as_posix())} '
+                    f'-C {shlex.quote(remote.as_posix())} '
+                    f'-T {shlex.quote(remote_list_file.as_posix())}'
+                )
+                self.sync_connection.run(pack_cmd, in_stream=False)
 
-            local_archive_path=tmpdir_path / remote_archive_file.name
-            self.download_file(local_file=local_archive_path,remote_file=remote_archive_file)
+                local_archive_path=tmpdir_path / remote_archive_file.name
+                self.download_file(local_file=local_archive_path,remote_file=remote_archive_file)
 
-            with tarfile.open(local_archive_path, 'r:gz') as archive:
-                archive.extractall(path=local)
+                with tarfile.open(local_archive_path, 'r:gz') as archive:
+                    archive.extractall(path=local)
 
-            if local_archive_path.exists():
-                local_archive_path.unlink()
+            except Exception as exc:
+                success=False
+                error=exc
+            finally:
+                with suppress(Exception):
+                    self.sync_connection.run(f'rm -rf {shlex.quote(remote_tmp_dir.as_posix())}', in_stream=False, warn=True)
+                if local_archive_path and local_archive_path.exists():
+                    local_archive_path.unlink()
 
-            self.sync_connection.run(f'rm -rf {shlex.quote(remote_tmp_dir.as_posix())}', in_stream=False, warn=True)
+        if not success:
+            print(f"Warning: Packed download failed ({error}); falling back to incremental download...")
+            self.__sync_down_dir_incremental(local=local,remote=remote,filter=filter)
+
+    def __sync_down_dir_incremental(self, local: Path, remote: Path, filter=None, sync_info=None):
+        if sync_info is None:
+            sync_info=self.__get_sync_info(remote)
+
+        dirs={}
+        for remote_entry in sync_info:
+            try:
+                relative_path=remote_entry.relative_to(remote)
+            except ValueError:
+                continue
+
+            if filter is not None and not filter(remote_entry):
+                continue
+
+            local_entry=local / relative_path
+            if not self.__needs_download(local=local_entry,remote=remote_entry,sync_info=sync_info):
+                continue
+
+            if local_entry.parent not in dirs:
+                dirs[local_entry.parent]=[]
+            dirs[local_entry.parent].append(remote_entry)
+
+        for dir,files in dirs.items():
+            dir.mkdir(parents=True,exist_ok=True)
+            self.download_files(local_dir=dir,remote_files=files)
 
 
     def __get_sync_info(self,remote : Path):
