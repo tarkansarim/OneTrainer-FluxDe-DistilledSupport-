@@ -803,18 +803,34 @@ class TrainConfig(BaseConfig):
         config = TrainConfig.default_values().from_dict(self.to_dict())
 
         if config.concepts is None:
-            with open(config.concept_file_name, 'r') as f:
-                concepts = json.load(f)
-                for i in range(len(concepts)):
-                    concepts[i] = ConceptConfig.default_values().from_dict(concepts[i])
-                config.concepts = concepts
+            concept_path = config.concept_file_name
+            if concept_path:
+                try:
+                    with open(concept_path, 'r') as f:
+                        concepts = json.load(f)
+                        for i in range(len(concepts)):
+                            concepts[i] = ConceptConfig.default_values().from_dict(concepts[i])
+                        config.concepts = concepts
+                except FileNotFoundError:
+                    print(f"Warning: concept definition file '{concept_path}' not found; continuing without concepts")
+                    config.concepts = []
+            else:
+                config.concepts = []
 
         if config.samples is None:
-            with open(config.sample_definition_file_name, 'r') as f:
-                samples = json.load(f)
-                for i in range(len(samples)):
-                    samples[i] = SampleConfig.default_values().from_dict(samples[i])
-                config.samples = samples
+            samples_path = config.sample_definition_file_name
+            if samples_path:
+                try:
+                    with open(samples_path, 'r') as f:
+                        samples = json.load(f)
+                        for i in range(len(samples)):
+                            samples[i] = SampleConfig.default_values().from_dict(samples[i])
+                        config.samples = samples
+                except FileNotFoundError:
+                    print(f"Warning: sample definition file '{samples_path}' not found; continuing without samples")
+                    config.samples = []
+            else:
+                config.samples = []
 
         config_dict = config.to_dict()
         if not secrets:
