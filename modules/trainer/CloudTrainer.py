@@ -174,8 +174,14 @@ class CloudTrainer(BaseTrainer):
             if path.startswith("cloud:"):
                 setattr(config,attribute,path.replace("cloud:","",1))
             elif path != "" and (not if_exists or Path(path).exists()):
-                setattr(config,"local_"+attribute,path)
-                path=CloudTrainer.__adjust_path(path,remote.cloud.remote_dir)
+                local_path = Path(path).expanduser()
+                try:
+                    resolved_local = local_path.resolve()
+                except Exception:
+                    resolved_local = local_path.absolute()
+
+                setattr(config,"local_"+attribute,str(resolved_local))
+                path=CloudTrainer.__adjust_path(str(local_path),remote.cloud.remote_dir)
                 setattr(config,attribute,path)
 
         adjust(remote,"debug_dir")

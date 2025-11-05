@@ -107,12 +107,34 @@ class BaseCloud(metaclass=ABCMeta):
                     if len(backup_dirs) > 0:
                         latest_backup = backup_dirs[0]
                         remote_backup = Path(self.config.workspace_dir, "backup", latest_backup.name)
-                        print(f"uploading latest backup {latest_backup} -> {remote_backup}")
-                        self.file_sync.sync_up_dir(
-                            local=latest_backup,
-                            remote=remote_backup,
-                            recursive=True,
-                        )
+
+                        should_upload = True
+                        try:
+                            self.file_sync.sync_connection.open()
+                            check_cmd = f'test -d {shlex.quote(remote_backup.as_posix())}'
+                            result = self.file_sync.sync_connection.run(
+                                check_cmd,
+                                in_stream=False,
+                                warn=True,
+                                hide=True,
+                            )
+                            if result.exited == 0:
+                                should_upload = False
+                                print(
+                                    f"Skipping backup upload; remote folder {remote_backup} already exists."
+                                )
+                        except Exception as check_exc:
+                            print(
+                                f"Warning: Could not verify remote backup path {remote_backup}: {check_exc}"
+                            )
+
+                        if should_upload:
+                            print(f"uploading latest backup {latest_backup} -> {remote_backup}")
+                            self.file_sync.sync_up_dir(
+                                local=latest_backup,
+                                remote=remote_backup,
+                                recursive=True,
+                            )
         except Exception:
             # Do not fail the whole upload if backup upload fails; training can still proceed
             pass

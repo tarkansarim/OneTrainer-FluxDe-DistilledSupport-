@@ -404,9 +404,19 @@ class LinuxCloud(BaseCloud):
         self.file_sync.sync_up_file(local,Path(self.config_file))
 
     def sync_workspace(self):
-        self.file_sync.sync_down_dir(local=Path(self.config.local_workspace_dir),
-                                  remote=Path(self.config.workspace_dir),
-                                  filter=lambda path:BaseCloud._filter_download(config=self.config.cloud,path=path))
+        local_workspace = Path(self.config.local_workspace_dir).expanduser()
+        if not local_workspace.is_absolute():
+            local_workspace = (Path.cwd() / local_workspace).resolve()
+        else:
+            local_workspace = local_workspace.resolve()
+
+        local_workspace.mkdir(parents=True, exist_ok=True)
+
+        self.file_sync.sync_down_dir(
+            local=local_workspace,
+            remote=Path(self.config.workspace_dir),
+            filter=lambda path: BaseCloud._filter_download(config=self.config.cloud, path=path),
+        )
 
     def delete_workspace(self):
         self.connection.run(f"rm -r {shlex.quote(self.config.workspace_dir)}",in_stream=False)
