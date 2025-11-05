@@ -139,9 +139,17 @@ class TrainUI(ctk.CTk):
         # Persistent profiling window.
         self.profiling_window = ProfilingWindow(self)
 
+        self._autosave_job = None
+        self._autosave_interval_ms = 60000
+        self._schedule_autosave(initial_delay_ms=15000)
+
         self.protocol("WM_DELETE_WINDOW", self.__close)
 
     def __close(self):
+        if self._autosave_job is not None:
+            with suppress(Exception):
+                self.after_cancel(self._autosave_job)
+            self._autosave_job = None
         self.top_bar_component.save_default()
         self._stop_always_on_tensorboard()
         if hasattr(self, 'workspace_dir_trace_id'):
@@ -854,6 +862,18 @@ class TrainUI(ctk.CTk):
 
     def save_default(self):
         self.top_bar_component.save_default()
+
+    def _schedule_autosave(self, *, initial_delay_ms: int | None = None):
+        delay = initial_delay_ms if initial_delay_ms is not None else self._autosave_interval_ms
+        self._autosave_job = self.after(delay, self._autosave_tick)
+
+    def _autosave_tick(self):
+        try:
+            self.save_default()
+        except Exception:
+            traceback.print_exc()
+        finally:
+            self._schedule_autosave()
         self.concepts_tab.save_current_config()
         self.sampling_tab.save_current_config()
         self.additional_embeddings_tab.save_current_config()
