@@ -322,9 +322,8 @@ class StableDiffusionFineTuneVaeDataLoader(BaseDataLoader):
                 augmentation_modules,
                 preparation_modules,
                 cache_modules,
-                output_modules,
-
                 debug_modules if debug_enabled else None,
+                output_modules,
             ],
             train_progress,
             is_validation,

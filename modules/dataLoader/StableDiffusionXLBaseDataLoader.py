@@ -281,10 +281,8 @@ class StableDiffusionXLBaseDataLoader(
                 inpainting_modules,
                 preparation_modules,
                 cache_modules,
-                output_modules,
-
                 debug_modules if debug_enabled else None,
-                # inserted before output_modules, which contains a sorting operation
+                output_modules,
             ],
             train_progress,
             is_validation,
