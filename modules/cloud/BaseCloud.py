@@ -2,6 +2,7 @@ import json
 import shlex
 from abc import ABCMeta, abstractmethod
 from pathlib import Path
+from typing import Callable, Optional
 
 from modules.util.callbacks.TrainCallbacks import TrainCallbacks
 from modules.util.commands.TrainCommands import TrainCommands
@@ -15,6 +16,7 @@ class BaseCloud(metaclass=ABCMeta):
         super().__init__()
         self.config = config
         self.file_sync=None
+        self._connection_update_callback: Optional[Callable[[str, str, str], None]] = None
 
 
     def setup(self):
@@ -63,6 +65,24 @@ class BaseCloud(metaclass=ABCMeta):
         with local_config_path.open(mode="w") as f:
             json.dump(self.config.to_pack_dict(secrets=False), f, indent=4)
         self._upload_config_file(local_config_path)
+
+    def set_connection_update_callback(self, callback: Optional[Callable[[str, str, str], None]]):
+        self._connection_update_callback = callback
+
+    def _notify_connection_update(self):
+        if not self._connection_update_callback:
+            return
+
+        secrets = self.config.secrets.cloud
+        host = secrets.host or ""
+        port = secrets.port if secrets.port is not None else ""
+        port_str = str(port) if port != "" else ""
+        cloud_id = getattr(secrets, "id", "") or ""
+
+        try:
+            self._connection_update_callback(host, port_str, cloud_id)
+        except Exception:
+            pass
 
         if hasattr(self.config,"local_base_model_name"):
             self.file_sync.sync_up(local=Path(self.config.local_base_model_name),remote=Path(self.config.base_model_name))

@@ -62,6 +62,8 @@ class LinuxCloud(BaseCloud):
                 case CloudFileSync.FABRIC_SFTP:
                     self.file_sync=FabricFileSync(config,secrets)
 
+            self._notify_connection_update()
+
         except Exception:
             if self.connection:
                 self.connection.close()

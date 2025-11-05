@@ -752,18 +752,17 @@ class TrainUI(ctk.CTk):
         self.training_callbacks = TrainCallbacks(
             on_update_train_progress=self.on_update_train_progress,
             on_update_status=self.on_update_status,
+            on_update_cloud_connection=self._on_cloud_connection_update,
         )
 
         trainer = create.create_trainer(self.train_config, self.training_callbacks, self.training_commands, reattach=self.cloud_tab.reattach)
         try:
             trainer.start()
-            if self.train_config.cloud.enabled:
-                self.ui_state.get_var("secrets.cloud").update(self.train_config.secrets.cloud)
+            self._schedule_cloud_ui_refresh()
             self.start_time = time.monotonic()
             trainer.train()
         except Exception:
-            if self.train_config.cloud.enabled:
-                self.ui_state.get_var("secrets.cloud").update(self.train_config.secrets.cloud)
+            self._schedule_cloud_ui_refresh()
             error_caught = True
             traceback.print_exc()
 
@@ -788,6 +787,42 @@ class TrainUI(ctk.CTk):
 
         if self.train_config.tensorboard_always_on and not self.always_on_tensorboard_subprocess:
             self.after(0, self._start_always_on_tensorboard)
+
+    def _schedule_cloud_ui_refresh(self):
+        if not self.train_config.cloud.enabled:
+            return
+
+        def updater():
+            try:
+                secrets_state = self.ui_state.get_var("secrets")
+                cloud_state = secrets_state.get_var("cloud")
+                cloud_state.update(self.train_config.secrets.cloud)
+            except Exception:
+                pass
+
+        self.after(0, updater)
+
+    def _on_cloud_connection_update(self, host: str, port: str, cloud_id: str):
+        if not self.train_config.cloud.enabled:
+            return
+
+        def updater():
+            try:
+                secrets_state = self.ui_state.get_var("secrets")
+                cloud_state = secrets_state.get_var("cloud")
+
+                if host is not None and host != "":
+                    cloud_state.get_var("host").set(host)
+
+                if port is not None and str(port).strip() not in {"", "0"}:
+                    cloud_state.get_var("port").set(str(port))
+
+                if cloud_id is not None and cloud_id != "":
+                    cloud_state.get_var("id").set(cloud_id)
+            except Exception:
+                pass
+
+        self.after(0, updater)
 
     def start_training(self):
         if self.training_thread is None:

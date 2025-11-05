@@ -31,6 +31,7 @@ class RunpodCloud(LinuxCloud):
                     if port['isIpPublic']:
                         secrets.host=port['ip']
                         secrets.port=port['publicPort']
+                        self._notify_connection_update()
                         if resumed:
                             try:
                                 super()._connect()
@@ -81,6 +82,7 @@ class RunpodCloud(LinuxCloud):
             env={"JUPYTER_PASSWORD": pysecrets.token_urlsafe(16)},
         )
         secrets.id=pod['id']
+        self._notify_connection_update()
 
     def delete(self):
         runpod.terminate_pod(self.config.secrets.cloud.id)

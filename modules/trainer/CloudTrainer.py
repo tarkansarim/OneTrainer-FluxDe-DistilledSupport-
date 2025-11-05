@@ -38,6 +38,8 @@ class CloudTrainer(BaseTrainer):
             case CloudType.LINUX:
                 self.cloud=LinuxCloud(self.remote_config)
 
+        self.cloud.set_connection_update_callback(self.__handle_cloud_connection_update)
+
     def start(self):
         try:
             self.callbacks.on_update_status("setting up cloud")
@@ -93,6 +95,18 @@ class CloudTrainer(BaseTrainer):
 
         if self.config.continue_last_backup:
             print('info: latest backup will be uploaded before starting training (if found).')
+
+    def __handle_cloud_connection_update(self, host: str, port: str, cloud_id: str):
+        secrets = self.config.secrets.cloud
+        if host is not None:
+            secrets.host = str(host)
+        if port is not None and port != "":
+            secrets.port = str(port)
+        if cloud_id is not None:
+            secrets.id = str(cloud_id)
+
+        if self.callbacks:
+            self.callbacks.on_update_cloud_connection(str(host or ""), str(port or ""), str(cloud_id or ""))
 
     def train(self):
         try:
