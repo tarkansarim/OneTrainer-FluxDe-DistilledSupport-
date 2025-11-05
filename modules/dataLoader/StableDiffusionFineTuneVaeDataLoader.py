@@ -309,7 +309,7 @@ class StableDiffusionFineTuneVaeDataLoader(BaseDataLoader):
         output_modules = self.__output_modules(config)
 
         debug_modules = self.__debug_modules(config, model)
-        debug_enabled = config.debug_mode and (not config.multi_gpu or multi.is_master())
+        debug_enabled = config.debug_mode and not config.multi_gpu
 
         return self._create_mgds(
             config,

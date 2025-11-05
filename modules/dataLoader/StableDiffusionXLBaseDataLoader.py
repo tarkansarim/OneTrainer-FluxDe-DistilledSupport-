@@ -267,7 +267,7 @@ class StableDiffusionXLBaseDataLoader(
         output_modules = self._output_modules(config, model)
 
         debug_modules = self._debug_modules(config, model)
-        debug_enabled = config.debug_mode and (not config.multi_gpu or multi.is_master())
+        debug_enabled = config.debug_mode and not config.multi_gpu
 
         return self._create_mgds(
             config,
