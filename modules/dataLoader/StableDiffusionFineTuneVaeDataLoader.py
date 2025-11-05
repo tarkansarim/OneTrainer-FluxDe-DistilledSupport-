@@ -4,7 +4,7 @@ import re
 
 from modules.dataLoader.BaseDataLoader import BaseDataLoader
 from modules.dataLoader.mixin.DataLoaderText2ImageMixin import DataLoaderText2ImageMixin
-from modules.model.StableDiffusionFineTuneVaeModel import StableDiffusionFineTuneVaeModel
+from modules.model.StableDiffusionModel import StableDiffusionModel
 from modules.util import path_util
 from modules.util.config.TrainConfig import TrainConfig
 from modules.util.torch_util import torch_gc
@@ -46,7 +46,7 @@ class StableDiffusionFineTuneVaeDataLoader(BaseDataLoader):
             train_device: torch.device,
             temp_device: torch.device,
             config: TrainConfig,
-            model: StableDiffusionFineTuneVaeModel,
+            model: StableDiffusionModel,
             train_progress: TrainProgress,
             is_validation: bool = False,
     ):
@@ -76,7 +76,7 @@ class StableDiffusionFineTuneVaeDataLoader(BaseDataLoader):
 
     def _setup_cache_device(
             self,
-            model: StableDiffusionFineTuneVaeModel,
+            model: StableDiffusionModel,
             train_device: torch.device,
             temp_device: torch.device,
             config: TrainConfig,
@@ -204,14 +204,14 @@ class StableDiffusionFineTuneVaeDataLoader(BaseDataLoader):
 
         return modules
 
-    def __preparation_modules(self, config: TrainConfig, model: StableDiffusionFineTuneVaeModel):
+    def __preparation_modules(self, config: TrainConfig, model: StableDiffusionModel):
         image = EncodeVAE(in_name='image', out_name='latent_image_distribution', vae=model.vae)
 
         modules = [image]
 
         return modules
 
-    def __cache_modules(self, config: TrainConfig, model: StableDiffusionFineTuneVaeModel):
+    def __cache_modules(self, config: TrainConfig, model: StableDiffusionModel):
         split_names = ['image', 'latent_image_distribution']
 
         if config.masked_training:
@@ -268,7 +268,7 @@ class StableDiffusionFineTuneVaeDataLoader(BaseDataLoader):
 
         return modules
 
-    def __debug_modules(self, config: TrainConfig, model: StableDiffusionFineTuneVaeModel):
+    def __debug_modules(self, config: TrainConfig, model: StableDiffusionModel):
         debug_dir = os.path.join(config.debug_dir, "dataloader")
 
         def before_save_fun():
@@ -294,7 +294,7 @@ class StableDiffusionFineTuneVaeDataLoader(BaseDataLoader):
     def create_dataset(
             self,
             config: TrainConfig,
-            model: StableDiffusionFineTuneVaeModel,
+            model: StableDiffusionModel,
             train_progress: TrainProgress,
             is_validation: bool = False,
     ):
