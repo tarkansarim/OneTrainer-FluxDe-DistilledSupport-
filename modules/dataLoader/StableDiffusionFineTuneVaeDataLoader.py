@@ -3,11 +3,13 @@ import os
 import re
 
 from modules.dataLoader.BaseDataLoader import BaseDataLoader
-from modules.model.StableDiffusionModel import StableDiffusionModel
+from modules.dataLoader.mixin.DataLoaderText2ImageMixin import DataLoaderText2ImageMixin
+from modules.model.StableDiffusionFineTuneVaeModel import StableDiffusionFineTuneVaeModel
 from modules.util import path_util
 from modules.util.config.TrainConfig import TrainConfig
 from modules.util.torch_util import torch_gc
 from modules.util.TrainProgress import TrainProgress
+import modules.util.multi_gpu_util as multi
 
 from mgds.MGDS import MGDS, TrainDataLoader
 from mgds.OutputPipelineModule import OutputPipelineModule
@@ -44,7 +46,7 @@ class StableDiffusionFineTuneVaeDataLoader(BaseDataLoader):
             train_device: torch.device,
             temp_device: torch.device,
             config: TrainConfig,
-            model: StableDiffusionModel,
+            model: StableDiffusionFineTuneVaeModel,
             train_progress: TrainProgress,
             is_validation: bool = False,
     ):
@@ -74,7 +76,7 @@ class StableDiffusionFineTuneVaeDataLoader(BaseDataLoader):
 
     def _setup_cache_device(
             self,
-            model: StableDiffusionModel,
+            model: StableDiffusionFineTuneVaeModel,
             train_device: torch.device,
             temp_device: torch.device,
             config: TrainConfig,
@@ -202,14 +204,14 @@ class StableDiffusionFineTuneVaeDataLoader(BaseDataLoader):
 
         return modules
 
-    def __preparation_modules(self, config: TrainConfig, model: StableDiffusionModel):
+    def __preparation_modules(self, config: TrainConfig, model: StableDiffusionFineTuneVaeModel):
         image = EncodeVAE(in_name='image', out_name='latent_image_distribution', vae=model.vae)
 
         modules = [image]
 
         return modules
 
-    def __cache_modules(self, config: TrainConfig, model: StableDiffusionModel):
+    def __cache_modules(self, config: TrainConfig, model: StableDiffusionFineTuneVaeModel):
         split_names = ['image', 'latent_image_distribution']
 
         if config.masked_training:
@@ -266,7 +268,7 @@ class StableDiffusionFineTuneVaeDataLoader(BaseDataLoader):
 
         return modules
 
-    def __debug_modules(self, config: TrainConfig, model: StableDiffusionModel):
+    def __debug_modules(self, config: TrainConfig, model: StableDiffusionFineTuneVaeModel):
         debug_dir = os.path.join(config.debug_dir, "dataloader")
 
         def before_save_fun():
@@ -292,7 +294,7 @@ class StableDiffusionFineTuneVaeDataLoader(BaseDataLoader):
     def create_dataset(
             self,
             config: TrainConfig,
-            model: StableDiffusionModel,
+            model: StableDiffusionFineTuneVaeModel,
             train_progress: TrainProgress,
             is_validation: bool = False,
     ):
@@ -307,6 +309,7 @@ class StableDiffusionFineTuneVaeDataLoader(BaseDataLoader):
         output_modules = self.__output_modules(config)
 
         debug_modules = self.__debug_modules(config, model)
+        debug_enabled = config.debug_mode and (not config.multi_gpu or multi.is_master())
 
         return self._create_mgds(
             config,
@@ -321,7 +324,7 @@ class StableDiffusionFineTuneVaeDataLoader(BaseDataLoader):
                 cache_modules,
                 output_modules,
 
-                debug_modules if config.debug_mode else None,
+                debug_modules if debug_enabled else None,
             ],
             train_progress,
             is_validation,

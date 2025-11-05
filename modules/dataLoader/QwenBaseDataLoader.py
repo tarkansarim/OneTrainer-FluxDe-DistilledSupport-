@@ -12,6 +12,7 @@ from modules.model.QwenModel import (
 from modules.util.config.TrainConfig import TrainConfig
 from modules.util.torch_util import torch_gc
 from modules.util.TrainProgress import TrainProgress
+import modules.util.multi_gpu_util as multi
 
 from mgds.MGDS import MGDS, TrainDataLoader
 from mgds.pipelineModules.DecodeTokens import DecodeTokens
@@ -237,6 +238,7 @@ class QwenBaseDataLoader(
         output_modules = self._output_modules(config, model)
 
         debug_modules = self._debug_modules(config, model)
+        debug_enabled = config.debug_mode and (not config.multi_gpu or multi.is_master())
 
         return self._create_mgds(
             config,
@@ -252,7 +254,7 @@ class QwenBaseDataLoader(
                 cache_modules,
                 output_modules,
 
-                debug_modules if config.debug_mode else None,
+                debug_modules if debug_enabled else None,
                 # inserted before output_modules, which contains a sorting operation
             ],
             train_progress,
