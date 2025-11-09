@@ -4,6 +4,7 @@ from modules.util.config.TrainConfig import TrainConfig
 from modules.util.enum.ConfigPart import ConfigPart
 from modules.util.enum.DataType import DataType
 from modules.util.enum.ModelFormat import ModelFormat
+from modules.util.enum.ModelType import ModelType
 from modules.util.enum.TrainingMethod import TrainingMethod
 from modules.util.ui import components
 from modules.util.ui.UIState import UIState
@@ -50,6 +51,8 @@ class ModelTab:
             self.__setup_wuerstchen_ui()
         elif self.train_config.model_type.is_pixart():
             self.__setup_pixart_alpha_ui()
+        elif self.train_config.model_type == ModelType.FLUX_SRPO_DEV:
+            self.__setup_flux_srpo_ui()
         elif self.train_config.model_type.is_flux():
             self.__setup_flux_ui()
         elif self.train_config.model_type.is_chroma():
@@ -117,6 +120,25 @@ class ModelTab:
             allow_diffusers=self.train_config.training_method == TrainingMethod.FINE_TUNE,
             allow_legacy_safetensors=self.train_config.training_method == TrainingMethod.LORA,
         )
+
+    def __setup_flux_srpo_ui(self):
+        row = 0
+        row = self.__create_base_dtype_components(row)
+        row = self.__create_base_components(
+            row,
+            has_prior=True,
+            allow_override_prior=True,
+            has_text_encoder_1=True,
+            has_text_encoder_2=True,
+            has_vae=True,
+        )
+        row = self.__create_output_components(
+            row,
+            allow_safetensors=True,
+            allow_diffusers=self.train_config.training_method == TrainingMethod.FINE_TUNE,
+            allow_legacy_safetensors=False,
+        )
+        row = self.__create_srpo_components(row)
 
     def __setup_chroma_ui(self):
         row = 0
@@ -526,3 +548,98 @@ class ModelTab:
         row += 1
 
         return row
+
+    def __create_srpo_components(self, row: int) -> int:
+        components.label(
+            self.scroll_frame,
+            row,
+            0,
+            "SRPO Integration",
+            tooltip=(
+                "Configuration for Tencent-Hunyuan's SRPO training wrapper. Ensure the working directory contains"
+                " the expected data/ and output/ folders referenced by SRPO scripts."
+            ),
+            wraplength=260,
+        )
+        row += 1
+
+        components.label(
+            self.scroll_frame,
+            row,
+            0,
+            "Working Directory",
+            tooltip=(
+                "Directory SRPO runs from. The upstream scripts expect relative paths like ./data/flux inside this"
+                " location."
+            ),
+        )
+        components.dir_entry(self.scroll_frame, row, 1, self.ui_state, "srpo_working_dir")
+        row += 1
+
+        components.label(
+            self.scroll_frame,
+            row,
+            0,
+            "Args JSON (optional)",
+            tooltip="Optional JSON payload consumed by the SRPO launcher for advanced scenarios.",
+        )
+        components.file_entry(
+            self.scroll_frame,
+            row,
+            1,
+            self.ui_state,
+            "srpo_args_file",
+            allow_model_files=False,
+        )
+        row += 1
+
+        components.label(
+            self.scroll_frame,
+            row,
+            0,
+            "Training Script",
+            tooltip="Relative path within the SRPO repository to execute (e.g. scripts/finetune/SRPO_training_hpsv2.sh).",
+        )
+        components.entry(self.scroll_frame, row, 1, self.ui_state, "srpo_training_script")
+        row += 1
+
+        components.label(
+            self.scroll_frame,
+            row,
+            0,
+            "Repository Ref",
+            tooltip="Optional branch, tag, or commit to checkout before running the script.",
+        )
+        components.entry(self.scroll_frame, row, 1, self.ui_state, "srpo_repo_ref")
+        row += 1
+
+        components.switch(
+            self.scroll_frame,
+            row,
+            1,
+            self.ui_state,
+            "srpo_force_refresh",
+            text="Force re-clone SRPO repository before launch",
+        )
+        row += 1
+
+        components.label(
+            self.scroll_frame,
+            row,
+            0,
+            "Extra Launch Args",
+            tooltip="Additional arguments appended to the SRPO script invocation (space separated).",
+        )
+        components.entry(self.scroll_frame, row, 1, self.ui_state, "srpo_extra_args", width=280)
+        row += 1
+
+        components.label(
+            self.scroll_frame,
+            row,
+            0,
+            "Extra Env Vars",
+            tooltip="Environment variables injected before SRPO launch (separate multiple entries with commas or newlines, e.g. FOO=bar).",
+        )
+        components.entry(self.scroll_frame, row, 1, self.ui_state, "srpo_extra_env", width=280)
+
+        return row + 1

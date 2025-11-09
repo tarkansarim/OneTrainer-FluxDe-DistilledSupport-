@@ -1711,90 +1711,7 @@ def _restore_local_paths(config: TrainConfig):
         # Don't restore if cloud is still enabled
         return
     
-    def is_remote_path(path: str) -> bool:
-        """Check if a path looks like a remote cloud path."""
-        if not path:
-            return False
-        path_lower = path.lower()
-        # Check for common remote path patterns
-        return (path.startswith("/workspace") or 
-                "/remote/" in path_lower or
-                path.startswith("/tmp") or
-                (path.startswith("/") and "workspace" in path_lower))
-    
-    def restore(config_obj, attribute: str, default_value: str = None, force: bool = False):
-        local_attr = "local_" + attribute
-        current_value = getattr(config_obj, attribute, "")
-        
-        # First try to restore from local_* attribute
-        if hasattr(config_obj, local_attr):
-            local_value = getattr(config_obj, local_attr)
-            if local_value and not is_remote_path(local_value):
-                setattr(config_obj, attribute, local_value)
-                return
-        
-        # If force is True, or if no local_* attribute and current path looks remote, reset to default
-        if force or (default_value is not None and is_remote_path(current_value)):
-            if default_value is not None:
-                setattr(config_obj, attribute, default_value)
-    
-    # Restore top-level paths with defaults
-    # Force reset workspace_dir if it looks remote (just like output_model_destination)
-    workspace_dir = getattr(config, "workspace_dir", "")
-    if is_remote_path(workspace_dir):
-        if hasattr(config, "local_workspace_dir") and config.local_workspace_dir:
-            config.workspace_dir = config.local_workspace_dir
-        else:
-            # Don't reset to default - user might have a different local workspace
-            # Only reset if it's clearly a remote path and no local_* exists
-            # Leave it to the user to set the correct path, or check if a common local path exists
-            # For now, try to extract the workspace name from remote path if possible
-            # e.g., /workspace/remote/workspace/Mitch_SRPO_v2 -> workspace/Mitch_SRPO_v2
-            if "/workspace/remote/workspace/" in workspace_dir:
-                # Extract the workspace name from remote path
-                parts = workspace_dir.split("/workspace/remote/workspace/")
-                if len(parts) > 1:
-                    config.workspace_dir = f"workspace/{parts[-1]}"
-                else:
-                    config.workspace_dir = "workspace/run"
-            else:
-                config.workspace_dir = "workspace/run"
-    
-    # Force reset cache_dir if it looks remote
-    cache_dir = getattr(config, "cache_dir", "")
-    if is_remote_path(cache_dir):
-        if hasattr(config, "local_cache_dir") and config.local_cache_dir:
-            config.cache_dir = config.local_cache_dir
-        else:
-            # Derive from workspace_dir (which we just fixed above)
-            if config.workspace_dir and not is_remote_path(config.workspace_dir):
-                # If workspace_dir is workspace/Mitch_SRPO_v2, cache_dir should be workspace-cache/Mitch_SRPO_v2
-                workspace_path = Path(config.workspace_dir)
-                if workspace_path.name:  # If there's a workspace name
-                    config.cache_dir = f"workspace-cache/{workspace_path.name}"
-                else:
-                    config.cache_dir = "workspace-cache/run"
-            else:
-                config.cache_dir = "workspace-cache/run"
-    
-    restore(config, "debug_dir", "debug")
-    restore(config, "base_model_name")
-    # Always reset output_model_destination to models/lora.safetensors when cloud is disabled
-    restore(config, "output_model_destination", "models/lora.safetensors", force=True)
-    restore(config, "lora_model_name", "models/lora.safetensors")
-    
-    # Restore nested paths
-    restore(config.prior, "model_name")
-    restore(config.embedding, "model_name")
-    
-    for add_embedding in config.additional_embeddings:
-        restore(add_embedding, "model_name")
-    
-    # Restore concept paths
-    if config.concepts is not None:
-        for concept in config.concepts:
-            restore(concept, "path")
-            restore(concept.text, "prompt_path")
+    config.normalize_local_paths(force_defaults=True)
 
 
 def create_trainer(
@@ -1809,6 +1726,10 @@ def create_trainer(
     if config.cloud.enabled:
         from modules.trainer.CloudTrainer import CloudTrainer
         trainer = CloudTrainer(config, callbacks, commands, reattach=reattach)
+    elif config.model_type == ModelType.FLUX_SRPO_DEV:
+        from modules.trainer.SRPOExternalTrainer import SRPOExternalTrainer
+
+        trainer = SRPOExternalTrainer(config, callbacks, commands)
     elif config.multi_gpu:
         from modules.trainer.MultiTrainer import MultiTrainer
         trainer = MultiTrainer(config, callbacks, commands)

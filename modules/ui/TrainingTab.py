@@ -22,6 +22,7 @@ from modules.util.enum.LearningRateScaler import LearningRateScaler
 from modules.util.enum.LearningRateScheduler import LearningRateScheduler
 from modules.util.enum.LossScaler import LossScaler
 from modules.util.enum.LossWeight import LossWeight
+from modules.util.enum.ModelType import ModelType
 from modules.util.enum.Optimizer import Optimizer
 from modules.util.enum.TimestepDistribution import TimestepDistribution
 from modules.util.optimizer_util import change_optimizer
@@ -82,6 +83,10 @@ class TrainingTab:
         column_2.grid(row=0, column=2, sticky="nsew")
         column_2.grid_columnconfigure(0, weight=1)
 
+        if self.train_config.model_type == ModelType.FLUX_SRPO_DEV:
+            self.__setup_srpo_ui(column_0, column_2)
+            return
+
         if self.train_config.model_type.is_stable_diffusion(): #TODO simplify
             self.presets = sd_presets
         elif self.train_config.model_type.is_stable_diffusion_xl():
@@ -131,6 +136,222 @@ class TrainingTab:
         elif self.train_config.model_type.is_hi_dream():
             self.__setup_hi_dream_ui(column_0, column_1, column_2)
 
+
+    def __setup_srpo_ui(self, column_0, column_2):
+        frame = ctk.CTkFrame(master=column_0, corner_radius=5)
+        frame.grid(row=0, column=0, padx=5, pady=5, sticky="nsew")
+        frame.grid_columnconfigure(0, weight=1)
+        frame.grid_columnconfigure(1, weight=1)
+
+        components.label(
+            frame,
+            0,
+            0,
+            "SRPO External Training",
+            tooltip="SRPO executes Tencent-Hunyuan's training scripts via the wrapper."
+        )
+        components.label(
+            frame,
+            1,
+            0,
+            "Training parameters are managed by the SRPO script. Configure the SRPO Integration section "
+            "in the Model tab (working directory, script, arguments, rewards) before starting training.",
+            wraplength=420,
+            tooltip="Adjust SRPO Integration settings in the Model tab."
+        )
+
+        row = 2
+
+        components.label(
+            frame,
+            row,
+            0,
+            "Reward model",
+            tooltip="Select which SRPO reward model to use (HPS, CLIP, or PickScore)."
+        )
+        components.options(frame, row, 1, ["HPS", "CLIP", "PickScore"], self.ui_state, "srpo_reward_model")
+        row += 1
+
+        reset_button = components.button(
+            column_2,
+            0,
+            0,
+            "Reset SRPO defaults",
+            self.__reset_srpo_defaults,
+            tooltip="Restore all SRPO parameters to the reference script defaults."
+        )
+        reset_button.grid_configure(sticky="ne", padx=5, pady=5)
+
+        sections: list[tuple[str, list[tuple[str, str, str]]]] = [
+            (
+                "Core Settings",
+                [
+                    ("Seed", "srpo_seed", "Random seed used for the SRPO training run."),
+                    ("Train batch size", "srpo_train_batch_size", "Per-device batch size consumed by the SRPO script."),
+                    ("Gradient accumulation", "srpo_gradient_accumulation_steps", "Number of gradient accumulation steps inside SRPO."),
+                    ("Learning rate", "srpo_learning_rate", "Base learning rate passed to SRPO."),
+                    ("LR warmup steps", "srpo_lr_warmup_steps", "Warmup steps before reaching the target learning rate."),
+                    ("Weight decay", "srpo_weight_decay", "Weight decay applied by SRPO's optimizer."),
+                    ("LR scheduler", "srpo_lr_scheduler", "Scheduler strategy used inside SRPO."),
+                    ("LR cycles", "srpo_lr_num_cycles", "Number of cycles for cosine/polynomial schedulers."),
+                    ("LR power", "srpo_lr_power", "Polynomial scheduler power factor."),
+                    ("Master weight type", "srpo_master_weight_type", "Precision used for FSDP master weights."),
+                    ("Max train steps", "srpo_max_train_steps", "Total SRPO optimization steps."),
+                    ("Sampling steps", "srpo_sampling_steps", "Number of denoising steps for SRPO sampling."),
+                    ("Max grad norm", "srpo_max_grad_norm", "Gradient clipping threshold within SRPO."),
+                ],
+            ),
+            (
+                "EMA & Guidance",
+                [
+                    ("EMA decay", "srpo_ema_decay", "EMA decay applied to the model."),
+                    ("EMA start step", "srpo_ema_start_step", "Step offset before EMA starts updating."),
+                    ("CFG", "srpo_cfg", "Classifier-free guidance strength for visualization."),
+                    ("Train guidance", "srpo_train_guidence", "Guidance scale used during SRPO training."),
+                    ("Vis guidance", "srpo_vis_guidence", "Guidance scale used during SRPO visualization."),
+                    ("Eta", "srpo_eta", "Eta parameter for the sampler."),
+                    ("Loss coefficient", "srpo_loss_coef", "Global loss coefficient used during optimization."),
+                    ("Train timestep (start end)", "srpo_train_timestep", "Two integers describing the timestep window, e.g. '5 25'."),
+                ],
+            ),
+            (
+                "Checkpointing & Logging",
+                [
+                    ("Checkpointing steps", "srpo_checkpointing_steps", "Save a checkpoint every N steps."),
+                    ("Resume from checkpoint", "srpo_resume_from_checkpoint", "Set to a checkpoint path or 'latest' to resume."),
+                    ("Logging directory", "srpo_logging_dir", "TensorBoard logging directory relative to the working dir."),
+                    ("Output directory", "srpo_output_dir", "Output directory relative to the SRPO working dir."),
+                    ("Cache directory", "srpo_cache_dir", "SRPO cache directory relative to the working dir."),
+                    ("Selective checkpointing", "srpo_selective_checkpointing", "Fraction of layers participating in checkpointing (1.0 = all)."),
+                ],
+            ),
+            (
+                "Data & Parallelism",
+                [
+                    ("Num latent t", "srpo_num_latent_t", "Number of latent frames sampled per prompt."),
+                    ("Sequence parallel size", "srpo_sp_size", "Sequence parallelism shard count (sp_size)."),
+                    ("SP batch size", "srpo_train_sp_batch_size", "Per-SP microbatch size used inside the SRPO loop."),
+                    ("Dataloader workers", "srpo_dataloader_num_workers", "Worker processes used by SRPO's dataloader."),
+                    ("Timestep length", "srpo_timestep_length", "Length of the sigma schedule (timestep_length)."),
+                    ("Groundtruth ratio", "srpo_groundtruth_ratio", "Groundtruth ratio for SRPO reward mixing."),
+                    ("Discount inv", "srpo_discount_inv", "Inverse discount parameters (two values)."),
+                    ("Discount pos", "srpo_discount_pos", "Positive discount parameters (two values)."),
+                    ("Shift", "srpo_shift", "Timestep shift parameter."),
+                ],
+            ),
+            (
+                "Resolution & Output",
+                [
+                    ("Height", "srpo_h", "Rendered image height."),
+                    ("Width", "srpo_w", "Rendered image width."),
+                    ("Frames", "srpo_t", "Frame count for SRPO renders."),
+                    ("Image prefix", "srpo_image_prefix", "Subdirectory prefix used for SRPO image dumps."),
+                    ("Sampler seed", "srpo_sampler_seed", "Seed used for SRPO sampling previews."),
+                    ("Mixed precision", "srpo_mixed_precision", "Mixed precision mode (e.g. bf16, fp16)."),
+                    ("Vis sampling steps", "srpo_vis_sampling_step", "Number of denoising steps used during SRPO visualization sampling."),
+                    ("Vis size", "srpo_vis_size", "SRPO visualization image size."),
+                    ("Vis tile size", "srpo_vis_tile_size", "Tile size for SRPO visualization decode (smaller uses less VRAM)."),
+                ],
+            ),
+        ]
+
+        for header, fields in sections:
+            components.label(frame, row, 0, header)
+            row += 1
+            for label, var_name, tooltip in fields:
+                components.label(frame, row, 0, label, tooltip=tooltip)
+                if var_name == "srpo_lr_scheduler":
+                    components.options(frame, row, 1, [
+                        "linear",
+                        "cosine",
+                        "cosine_with_restarts",
+                        "polynomial",
+                        "constant",
+                        "constant_with_warmup",
+                    ], self.ui_state, var_name)
+                elif var_name == "srpo_master_weight_type":
+                    components.options(frame, row, 1, ["fp32", "bf16"], self.ui_state, var_name)
+                elif var_name == "srpo_mixed_precision":
+                    components.options(frame, row, 1, ["no", "fp16", "bf16"], self.ui_state, var_name)
+                else:
+                    components.entry(frame, row, 1, self.ui_state, var_name)
+                row += 1
+
+        switches = [
+            ("Enable gradient checkpointing", "srpo_gradient_checkpointing"),
+            ("Allow TF32", "srpo_allow_tf32"),
+            ("Ignore last microbatch", "srpo_ignore_last"),
+            ("Precondition outputs", "srpo_precondition_outputs"),
+            ("Use CPU offload", "srpo_use_cpu_offload"),
+        ]
+
+        for text, var_name in switches:
+            switch = components.switch(frame, row, 0, self.ui_state, var_name, text=text)
+            switch.grid_configure(columnspan=2, sticky="w")
+            row += 1
+
+    def __reset_srpo_defaults(self):
+        defaults = TrainConfig.default_values()
+        fields = [
+            "srpo_reward_model",
+            "srpo_seed",
+            "srpo_train_batch_size",
+            "srpo_gradient_accumulation_steps",
+            "srpo_learning_rate",
+            "srpo_lr_warmup_steps",
+            "srpo_weight_decay",
+            "srpo_lr_scheduler",
+            "srpo_lr_num_cycles",
+            "srpo_lr_power",
+            "srpo_master_weight_type",
+            "srpo_max_train_steps",
+            "srpo_sampling_steps",
+            "srpo_max_grad_norm",
+            "srpo_ema_decay",
+            "srpo_ema_start_step",
+            "srpo_cfg",
+            "srpo_train_guidence",
+            "srpo_eta",
+            "srpo_loss_coef",
+            "srpo_train_timestep",
+            "srpo_vis_guidence",
+            "srpo_checkpointing_steps",
+            "srpo_resume_from_checkpoint",
+            "srpo_logging_dir",
+            "srpo_output_dir",
+            "srpo_cache_dir",
+            "srpo_selective_checkpointing",
+            "srpo_num_latent_t",
+            "srpo_sp_size",
+            "srpo_train_sp_batch_size",
+            "srpo_dataloader_num_workers",
+            "srpo_timestep_length",
+            "srpo_groundtruth_ratio",
+            "srpo_discount_inv",
+            "srpo_discount_pos",
+            "srpo_shift",
+            "srpo_h",
+            "srpo_w",
+            "srpo_t",
+            "srpo_image_prefix",
+            "srpo_sampler_seed",
+            "srpo_mixed_precision",
+            "srpo_vis_sampling_step",
+            "srpo_vis_size",
+        ]
+        switches = [
+            "srpo_gradient_checkpointing",
+            "srpo_allow_tf32",
+            "srpo_ignore_last",
+            "srpo_precondition_outputs",
+            "srpo_use_cpu_offload",
+        ]
+
+        for field in fields:
+            value = getattr(defaults, field)
+            self.ui_state.get_var(field).set("" if value is None else value)
+        for field in switches:
+            self.ui_state.get_var(field).set(getattr(defaults, field))
 
     def __setup_stable_diffusion_ui(self, column_0, column_1, column_2):
         self.__create_base_frame(column_0, 0)

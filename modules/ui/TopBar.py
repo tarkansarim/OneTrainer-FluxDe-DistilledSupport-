@@ -94,6 +94,7 @@ class TopBar:
                 ("PixArt Sigma", ModelType.PIXART_SIGMA),
                 ("Flux Dev", ModelType.FLUX_DEV_1),
                 ("Flux Fill Dev", ModelType.FLUX_FILL_DEV_1),
+                ("Flux Dev (SRPO)", ModelType.FLUX_SRPO_DEV),
                 ("Sana", ModelType.SANA),
                 ("Hunyuan Video", ModelType.HUNYUAN_VIDEO),
                 ("HiDream Full", ModelType.HI_DREAM_FULL),
@@ -117,6 +118,10 @@ class TopBar:
                 ("LoRA", TrainingMethod.LORA),
                 ("Embedding", TrainingMethod.EMBEDDING),
                 ("Fine Tune VAE", TrainingMethod.FINE_TUNE_VAE),
+            ]
+        elif self.train_config.model_type == ModelType.FLUX_SRPO_DEV:
+            values = [
+                ("Fine Tune", TrainingMethod.FINE_TUNE),
             ]
         elif self.train_config.model_type.is_stable_diffusion_3() \
                 or self.train_config.model_type.is_stable_diffusion_xl() \

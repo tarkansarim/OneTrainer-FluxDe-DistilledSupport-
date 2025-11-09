@@ -3,7 +3,7 @@ import threading
 import time
 import traceback
 from contextlib import suppress
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 from modules.cloud.LinuxCloud import LinuxCloud
 from modules.cloud.RunpodCloud import RunpodCloud
@@ -160,6 +160,7 @@ class CloudTrainer(BaseTrainer):
 
     @staticmethod
     def __make_remote_config(local : TrainConfig):
+        local.normalize_local_paths(allow_if_cloud_enabled=True)
         remote = TrainConfig.default_values().from_dict(local.to_pack_dict(secrets=True))
         #share cloud config, so UI can be updated to IP, port, cloudid:
         remote.cloud = local.cloud
@@ -171,6 +172,7 @@ class CloudTrainer(BaseTrainer):
 
         def adjust(config, attribute: str, if_exists: bool=False):
             path=getattr(config,attribute)
+            path = CloudTrainer.__normalize_local_path(path, remote.cloud.remote_dir)
             if path.startswith("cloud:"):
                 setattr(config,attribute,path.replace("cloud:","",1))
             elif path != "" and (not if_exists or Path(path).exists()):
@@ -219,3 +221,44 @@ class CloudTrainer(BaseTrainer):
             return (Path(remote_dir,"remote") / path).as_posix()
         else:
             return ""
+
+    @staticmethod
+    def __normalize_local_path(pathstr: str, remote_dir: str) -> str:
+        if not pathstr:
+            return pathstr
+
+        normalized = pathstr
+        previous = None
+        while normalized and normalized != previous:
+            previous = normalized
+            normalized = CloudTrainer.__remote_to_local_once(normalized, remote_dir)
+
+        return normalized
+
+    @staticmethod
+    def __remote_to_local_once(pathstr: str, remote_dir: str) -> str:
+        if not pathstr:
+            return pathstr
+
+        path_posix = pathstr.replace("\\", "/")
+        remote_prefixes = set()
+
+        if remote_dir:
+            remote_dir_posix = remote_dir.replace("\\", "/").rstrip("/")
+            if remote_dir_posix:
+                remote_prefixes.add(f"{remote_dir_posix}/remote/")
+                remote_prefixes.add(f"{remote_dir_posix.lstrip('/')}/remote/")
+
+        for prefix in remote_prefixes:
+            if path_posix.startswith(prefix):
+                remainder = path_posix[len(prefix):]
+                return CloudTrainer.__posix_to_os_path(remainder)
+
+        return pathstr
+
+    @staticmethod
+    def __posix_to_os_path(pathstr: str) -> str:
+        if not pathstr:
+            return ""
+        pure = PurePosixPath(pathstr)
+        return str(Path(*pure.parts))

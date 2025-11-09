@@ -60,3 +60,8 @@ fabric==3.2.2
 psutil==7.0.0
 requests==2.32.3
 deepdiff==8.6.1 # output easy to read diff for troublshooting
+loguru==0.7.2
+peft==0.13.1
+einops==0.8.0
+flash-attn==2.6.3; platform_system != "Windows"  # Optional fused attention kernels (skip on Windows where no wheels)
+decord==0.6.0

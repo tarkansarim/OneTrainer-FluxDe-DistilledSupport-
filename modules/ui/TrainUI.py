@@ -624,6 +624,25 @@ class TrainUI(ctk.CTk):
         if self.training_tab:
             self.training_tab.refresh_ui()
 
+        if model_type == ModelType.FLUX_SRPO_DEV:
+            if not self.train_config.srpo_working_dir:
+                self.train_config.srpo_working_dir = self.train_config.workspace_dir
+                try:
+                    self.ui_state.get_var("srpo_working_dir").set(self.train_config.srpo_working_dir)
+                except KeyError:
+                    pass
+            self.train_config.base_model_name = "tamtamx1332/FLUX.1-SRPO-dev-Diffusers"
+            try:
+                self.ui_state.get_var("base_model_name").set(self.train_config.base_model_name)
+            except KeyError:
+                pass
+            if self.train_config.multi_gpu:
+                self.train_config.multi_gpu = False
+                try:
+                    self.ui_state.get_var("multi_gpu").set(False)
+                except KeyError:
+                    pass
+
         if self.lora_tab:
             self.lora_tab.refresh_ui()
 

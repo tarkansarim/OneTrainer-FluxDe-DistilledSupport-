@@ -309,6 +309,65 @@ class TrainConfig(BaseConfig):
     continue_last_backup: bool
     include_train_config: ConfigPart
 
+    # SRPO external trainer integration
+    srpo_working_dir: str
+    srpo_args_file: str
+    srpo_training_script: str
+    srpo_repo_ref: str
+    srpo_force_refresh: bool
+    srpo_extra_args: str
+    srpo_extra_env: str
+    srpo_seed: int
+    srpo_cache_dir: str
+    srpo_output_dir: str
+    srpo_train_batch_size: int
+    srpo_gradient_accumulation_steps: int
+    srpo_learning_rate: float
+    srpo_lr_warmup_steps: int
+    srpo_weight_decay: float
+    srpo_max_train_steps: int
+    srpo_sampling_steps: int
+    srpo_train_guidence: float
+    srpo_vis_guidence: float
+    srpo_eta: float
+    srpo_max_grad_norm: float
+    srpo_num_latent_t: int
+    srpo_sp_size: int
+    srpo_train_sp_batch_size: int
+    srpo_dataloader_num_workers: int
+    srpo_timestep_length: int
+    srpo_groundtruth_ratio: float
+    srpo_discount_inv: str
+    srpo_discount_pos: str
+    srpo_shift: float
+    srpo_h: int
+    srpo_w: int
+    srpo_t: int
+    srpo_image_prefix: str
+    srpo_sampler_seed: int
+    srpo_mixed_precision: str
+    srpo_vis_sampling_step: int
+    srpo_vis_size: int
+    srpo_gradient_checkpointing: bool
+    srpo_allow_tf32: bool
+    srpo_ignore_last: bool
+    srpo_reward_model: str
+    srpo_checkpointing_steps: int
+    srpo_resume_from_checkpoint: str
+    srpo_logging_dir: str
+    srpo_lr_scheduler: str
+    srpo_lr_num_cycles: int
+    srpo_lr_power: float
+    srpo_master_weight_type: str
+    srpo_use_cpu_offload: bool
+    srpo_cfg: float
+    srpo_precondition_outputs: bool
+    srpo_ema_decay: float
+    srpo_ema_start_step: int
+    srpo_selective_checkpointing: float
+    srpo_loss_coef: float
+    srpo_train_timestep: str
+
     # multi-GPU
     multi_gpu: bool
     device_indexes: str
@@ -378,6 +437,7 @@ class TrainConfig(BaseConfig):
     layer_filter_preset: str
     layer_filter_regex: bool
     block_learning_rate_multiplier: dict[str, float]  # Maps block names to LR multipliers (0-1)
+    block_learning_rate_custom_presets: dict[str, dict[str, float]]
 
     # noise
     offset_noise_weight: float
@@ -497,7 +557,7 @@ class TrainConfig(BaseConfig):
     def __init__(self, data: list[(str, Any, type, bool)]):
         super().__init__(
             data,
-            config_version=8,
+            config_version=9,
             config_migrations={
                 0: self.__migration_0,
                 1: self.__migration_1,
@@ -507,6 +567,7 @@ class TrainConfig(BaseConfig):
                 5: self.__migration_5,
                 6: self.__migration_6,
                 7: self.__migration_7,
+                8: self.__migration_8,
             }
         )
 
@@ -696,6 +757,13 @@ class TrainConfig(BaseConfig):
 
         return migrated_data
 
+    def __migration_8(self, data: dict) -> dict:
+        migrated_data = data.copy()
+
+        migrated_data.setdefault("block_learning_rate_custom_presets", {})
+
+        return migrated_data
+
     def weight_dtypes(self) -> ModelWeightDtypes:
         return ModelWeightDtypes(
             self.train_dtype,
@@ -788,6 +856,146 @@ class TrainConfig(BaseConfig):
 
         return None
 
+    def normalize_local_paths(
+            self,
+            *,
+            allow_if_cloud_enabled: bool = False,
+            force_defaults: bool = False,
+    ) -> None:
+        """Ensure path fields point to local locations when remote paths leaked into the config."""
+
+        def normalize_path(path: Any) -> str:
+            if path is None:
+                return ""
+            return str(path).replace("\\", "/")
+
+        def is_remote_path(path: Any) -> bool:
+            value = normalize_path(path).lower()
+            if not value:
+                return False
+            if value.startswith("/workspace"):
+                return True
+            if value.startswith("workspace/remote"):
+                return True
+            if value.startswith("remote/"):
+                return True
+            if "/remote/workspace/" in value:
+                return True
+            if value.startswith("/tmp") or value.startswith("/var/tmp"):
+                return True
+            return False
+
+        def derive_local_workspace(remote_path: str) -> str:
+            normalized = normalize_path(remote_path)
+            markers = [
+                "/workspace/remote/workspace/",
+                "workspace/remote/workspace/",
+                "/workspace/",
+                "workspace/",
+                "remote/workspace/",
+            ]
+            for marker in markers:
+                if marker in normalized:
+                    suffix = normalized.split(marker, 1)[-1].strip("/")
+                    if suffix:
+                        return str(Path("workspace", *suffix.split("/")))
+            parts = [part for part in normalized.strip("/").split("/") if part]
+            if parts:
+                return str(Path("workspace", *parts))
+            return "workspace/run"
+
+        def derive_local_cache(remote_path: str) -> str:
+            normalized = normalize_path(remote_path)
+            markers = [
+                "/workspace/remote/workspace-cache/",
+                "workspace/remote/workspace-cache/",
+                "/workspace-cache/",
+                "workspace-cache/",
+                "remote/workspace-cache/",
+            ]
+            for marker in markers:
+                if marker in normalized:
+                    suffix = normalized.split(marker, 1)[-1].strip("/")
+                    if suffix:
+                        return str(Path("workspace-cache", *suffix.split("/")))
+                    break
+
+            workspace_local = getattr(self, "workspace_dir", "")
+            workspace_local = str(workspace_local) if workspace_local else ""
+            if workspace_local:
+                workspace_name = Path(workspace_local).name
+                if workspace_name:
+                    return str(Path("workspace-cache", workspace_name))
+            return "workspace-cache/run"
+
+        def set_with_local_attr(config_obj: Any, attribute: str, value: str) -> None:
+            setattr(config_obj, attribute, value)
+            setattr(config_obj, f"local_{attribute}", value)
+
+        def restore(config_obj: Any, attribute: str, default_value: str | None = None, force: bool = False) -> None:
+            if config_obj is None:
+                return
+
+            local_attr_name = f"local_{attribute}"
+            current_value = getattr(config_obj, attribute, "")
+
+            if hasattr(config_obj, local_attr_name):
+                local_value = getattr(config_obj, local_attr_name)
+                if local_value and not is_remote_path(local_value):
+                    setattr(config_obj, attribute, local_value)
+                    return
+
+            if force or (default_value is not None and is_remote_path(current_value)):
+                if default_value is not None:
+                    setattr(config_obj, attribute, default_value)
+                    setattr(config_obj, local_attr_name, default_value)
+
+        if getattr(self.cloud, "enabled", False) and not allow_if_cloud_enabled:
+            return
+
+        workspace_dir = getattr(self, "workspace_dir", "")
+        if is_remote_path(workspace_dir):
+            local_workspace = getattr(self, "local_workspace_dir", "")
+            if local_workspace and not is_remote_path(local_workspace):
+                workspace_dir = str(local_workspace)
+            else:
+                workspace_dir = derive_local_workspace(str(workspace_dir))
+            set_with_local_attr(self, "workspace_dir", str(workspace_dir))
+        elif workspace_dir:
+            set_with_local_attr(self, "workspace_dir", str(workspace_dir))
+
+        cache_dir = getattr(self, "cache_dir", "")
+        if is_remote_path(cache_dir):
+            local_cache = getattr(self, "local_cache_dir", "")
+            if local_cache and not is_remote_path(local_cache):
+                cache_dir = str(local_cache)
+            else:
+                cache_dir = derive_local_cache(str(cache_dir))
+            set_with_local_attr(self, "cache_dir", str(cache_dir))
+        elif cache_dir:
+            set_with_local_attr(self, "cache_dir", str(cache_dir))
+
+        debug_dir = getattr(self, "debug_dir", "")
+        if is_remote_path(debug_dir):
+            set_with_local_attr(self, "debug_dir", "debug")
+        elif debug_dir:
+            set_with_local_attr(self, "debug_dir", str(debug_dir))
+
+        restore(self, "base_model_name")
+        restore(self.prior, "model_name")
+        restore(self, "output_model_destination", "models/lora.safetensors", force=force_defaults)
+        restore(self, "lora_model_name", "models/lora.safetensors")
+
+        restore(self.embedding, "model_name")
+        for add_embedding in self.additional_embeddings:
+            restore(add_embedding, "model_name")
+
+        if self.concepts is not None:
+            for concept in self.concepts:
+                restore(concept, "path")
+                if getattr(concept, "text", None) is not None:
+                    restore(concept.text, "prompt_path")
+
     def to_settings_dict(self, secrets: bool) -> dict:
         config = TrainConfig.default_values().from_dict(self.to_dict())
 
@@ -865,6 +1073,66 @@ class TrainConfig(BaseConfig):
         data.append(("validate_after_unit", TimeUnit.EPOCH, TimeUnit, False))
         data.append(("continue_last_backup", False, bool, False))
         data.append(("include_train_config", ConfigPart.NONE, ConfigPart, False))
+
+        # SRPO external trainer
+        data.append(("srpo_working_dir", "", str, False))
+        data.append(("srpo_args_file", "", str, False))
+        data.append(("srpo_training_script", "scripts/finetune/SRPO_training_hpsv2.sh", str, False))
+        data.append(("srpo_repo_ref", "", str, False))
+        data.append(("srpo_force_refresh", False, bool, False))
+        data.append(("srpo_extra_args", "", str, False))
+        data.append(("srpo_extra_env", "", str, False))
+        data.append(("srpo_seed", 42, int, False))
+        data.append(("srpo_cache_dir", "data/.cache", str, False))
+        data.append(("srpo_output_dir", "./output/hps", str, False))
+        data.append(("srpo_train_batch_size", 1, int, False))
+        data.append(("srpo_gradient_accumulation_steps", 2, int, False))
+        data.append(("srpo_learning_rate", 5e-6, float, False))
+        data.append(("srpo_lr_warmup_steps", 0, int, False))
+        data.append(("srpo_weight_decay", 0.0001, float, False))
+        data.append(("srpo_max_train_steps", 30000000, int, False))
+        data.append(("srpo_sampling_steps", 25, int, False))
+        data.append(("srpo_train_guidence", 1.0, float, False))
+        data.append(("srpo_vis_guidence", 3.5, float, False))
+        data.append(("srpo_eta", 0.3, float, False))
+        data.append(("srpo_max_grad_norm", 0.1, float, False))
+        data.append(("srpo_num_latent_t", 1, int, False))
+        data.append(("srpo_sp_size", 1, int, False))
+        data.append(("srpo_train_sp_batch_size", 1, int, False))
+        data.append(("srpo_dataloader_num_workers", 4, int, False))
+        data.append(("srpo_timestep_length", 1000, int, False))
+        data.append(("srpo_groundtruth_ratio", 0.9, float, False))
+        data.append(("srpo_discount_inv", "0.3 0.01", str, False))
+        data.append(("srpo_discount_pos", "0.1 0.25", str, False))
+        data.append(("srpo_shift", 3.0, float, False))
+        data.append(("srpo_h", 720, int, False))
+        data.append(("srpo_w", 720, int, False))
+        data.append(("srpo_t", 1, int, False))
+        data.append(("srpo_image_prefix", "srpohps", str, False))
+        data.append(("srpo_sampler_seed", 1223627, int, False))
+        data.append(("srpo_mixed_precision", "bf16", str, False))
+        data.append(("srpo_vis_sampling_step", 10, int, False))
+        data.append(("srpo_vis_size", 512, int, False))
+        data.append(("srpo_vis_tile_size", 256, int, False))
+        data.append(("srpo_gradient_checkpointing", True, bool, False))
+        data.append(("srpo_allow_tf32", True, bool, False))
+        data.append(("srpo_ignore_last", True, bool, False))
+        data.append(("srpo_reward_model", "HPS", str, False))
+        data.append(("srpo_checkpointing_steps", 20, int, False))
+        data.append(("srpo_resume_from_checkpoint", "", str, False))
+        data.append(("srpo_logging_dir", "logs", str, False))
+        data.append(("srpo_lr_scheduler", "constant_with_warmup", str, False))
+        data.append(("srpo_lr_num_cycles", 1, int, False))
+        data.append(("srpo_lr_power", 1.0, float, False))
+        data.append(("srpo_master_weight_type", "fp32", str, False))
+        data.append(("srpo_use_cpu_offload", False, bool, False))
+        data.append(("srpo_cfg", 1.0, float, False))
+        data.append(("srpo_precondition_outputs", False, bool, False))
+        data.append(("srpo_ema_decay", 0.995, float, False))
+        data.append(("srpo_ema_start_step", 0, int, False))
+        data.append(("srpo_selective_checkpointing", 1.0, float, False))
+        data.append(("srpo_loss_coef", 1.0, float, False))
+        data.append(("srpo_train_timestep", "5 25", str, False))
 
         #multi-GPU
         data.append(("multi_gpu", False, bool, False))
@@ -1042,6 +1310,7 @@ class TrainConfig(BaseConfig):
         data.append(("layer_filter_preset", "full", str, False))
         data.append(("layer_filter_regex", False, bool, False))
         data.append(("block_learning_rate_multiplier", {}, dict, False))
+        data.append(("block_learning_rate_custom_presets", {}, dict, False))
 
         # embedding
         data.append(("embedding_learning_rate", None, float, True))
