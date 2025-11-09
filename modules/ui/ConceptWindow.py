@@ -118,6 +118,15 @@ class ConceptWindow(ctk.CTkToplevel):
         self.focus_set()
         self.after(200, lambda: set_window_icon(self))
 
+    @staticmethod
+    def _widget_exists(widget) -> bool:
+        if widget is None:
+            return False
+        try:
+            return bool(widget.winfo_exists())
+        except Exception:
+            return False
+
 
     def __general_tab(self, master, concept: ConceptConfig):
         frame = ctk.CTkScrollableFrame(master, fg_color="transparent")
@@ -745,6 +754,44 @@ class ConceptWindow(ctk.CTkToplevel):
         return image, filename_output, prompt_output
 
     def __update_concept_stats(self):
+        required_widgets = [
+            getattr(self, "concept_stats_tab", None),
+            getattr(self, "file_size_preview", None),
+            getattr(self, "processing_time", None),
+            getattr(self, "dir_count_preview", None),
+            getattr(self, "image_count_preview", None),
+            getattr(self, "image_count_mask_preview", None),
+            getattr(self, "image_count_caption_preview", None),
+            getattr(self, "video_count_preview", None),
+            getattr(self, "video_count_caption_preview", None),
+            getattr(self, "mask_count_preview", None),
+            getattr(self, "mask_count_preview_unpaired", None),
+            getattr(self, "caption_count_preview", None),
+            getattr(self, "caption_count_preview_unpaired", None),
+            getattr(self, "pixel_max_preview", None),
+            getattr(self, "pixel_avg_preview", None),
+            getattr(self, "pixel_min_preview", None),
+            getattr(self, "length_max_preview", None),
+            getattr(self, "length_avg_preview", None),
+            getattr(self, "length_min_preview", None),
+            getattr(self, "fps_max_preview", None),
+            getattr(self, "fps_avg_preview", None),
+            getattr(self, "fps_min_preview", None),
+            getattr(self, "caption_max_preview", None),
+            getattr(self, "caption_avg_preview", None),
+            getattr(self, "caption_min_preview", None),
+            getattr(self, "small_bucket_preview", None),
+        ]
+
+        if any(not self._widget_exists(widget) for widget in required_widgets):
+            return
+
+        canvas_widget = None
+        if getattr(self, "canvas", None) is not None and hasattr(self.canvas, "get_tk_widget"):
+            canvas_widget = self.canvas.get_tk_widget()
+            if not self._widget_exists(canvas_widget):
+                return
+
         #file size
         self.file_size_preview.configure(text=str(int(self.concept.concept_stats["file_size"]/1048576)) + " MB")
         self.processing_time.configure(text=str(round(self.concept.concept_stats["processing_time"], 2)) + " s")
@@ -853,7 +900,8 @@ class ConceptWindow(ctk.CTkToplevel):
         sec.spines["bottom"].set_linewidth(0)
         sec.set_xticks([0, (len(aspects)-1)/2, len(aspects)-1], labels=["Wide", "Square", "Tall"])
         sec.tick_params('x', length=0)
-        self.canvas.draw()
+        if canvas_widget is not None:
+            self.canvas.draw()
 
     def decimal_to_aspect_ratio(self, value : float):
         #find closest fraction to decimal aspect value and convert to a:b format
@@ -868,13 +916,16 @@ class ConceptWindow(ctk.CTkToplevel):
         start_time = time.perf_counter()
         last_update = time.perf_counter()
         self.cancel_scan_flag.clear()
-        self.concept_stats_tab.after(0, self.__disable_scan_buttons)
+        concept_stats_tab = getattr(self, "concept_stats_tab", None)
+        if self._widget_exists(concept_stats_tab):
+            concept_stats_tab.after(0, self.__disable_scan_buttons)
         concept_path = self.get_concept_path(self.concept.path)
 
         if not concept_path:
-           print(f"Unable to get statistics for invalid concept path: {self.concept.path}")
-           self.concept_stats_tab.after(0, self.__enable_scan_buttons)
-           return
+            print(f"Unable to get statistics for invalid concept path: {self.concept.path}")
+            if self._widget_exists(concept_stats_tab):
+                concept_stats_tab.after(0, self.__enable_scan_buttons)
+            return
         subfolders = [concept_path]
 
         stats_dict = concept_stats.init_concept_stats(advanced_checks)
@@ -888,23 +939,29 @@ class ConceptWindow(ctk.CTkToplevel):
             #update GUI approx every half second
             if time.perf_counter() > (last_update + 0.5):
                 last_update = time.perf_counter()
-                self.concept_stats_tab.after(0, self.__update_concept_stats)
+                if self._widget_exists(concept_stats_tab):
+                    concept_stats_tab.after(0, self.__update_concept_stats)
 
         self.cancel_scan_flag.clear()
-        self.concept_stats_tab.after(0, self.__enable_scan_buttons)
-        self.concept_stats_tab.after(0, self.__update_concept_stats)
+        if self._widget_exists(concept_stats_tab):
+            concept_stats_tab.after(0, self.__enable_scan_buttons)
+            concept_stats_tab.after(0, self.__update_concept_stats)
 
     def __get_concept_stats_threaded(self, advanced_checks : bool, waittime : float):
         self.scan_thread = threading.Thread(target=self.__get_concept_stats, args=[advanced_checks, waittime], daemon=True)
         self.scan_thread.start()
 
     def __disable_scan_buttons(self):
-        self.refresh_basic_stats_button.configure(state="disabled")
-        self.refresh_advanced_stats_button.configure(state="disabled")
+        if self._widget_exists(getattr(self, "refresh_basic_stats_button", None)):
+            self.refresh_basic_stats_button.configure(state="disabled")
+        if self._widget_exists(getattr(self, "refresh_advanced_stats_button", None)):
+            self.refresh_advanced_stats_button.configure(state="disabled")
 
     def __enable_scan_buttons(self):
-        self.refresh_basic_stats_button.configure(state="normal")
-        self.refresh_advanced_stats_button.configure(state="normal")
+        if self._widget_exists(getattr(self, "refresh_basic_stats_button", None)):
+            self.refresh_basic_stats_button.configure(state="normal")
+        if self._widget_exists(getattr(self, "refresh_advanced_stats_button", None)):
+            self.refresh_advanced_stats_button.configure(state="normal")
 
     def __cancel_concept_stats(self):
         self.cancel_scan_flag.set()
@@ -922,4 +979,6 @@ class ConceptWindow(ctk.CTkToplevel):
                     self.__get_concept_stats(True, 2)    #do advanced scan automatically if basic took <0.1s
 
     def __ok(self):
+        if hasattr(self, "cancel_scan_flag"):
+            self.cancel_scan_flag.set()
         self.destroy()
