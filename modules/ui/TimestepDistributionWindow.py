@@ -77,7 +77,7 @@ class TimestepDistributionWindow(ctk.CTkToplevel):
         super().__init__(parent, *args, **kwargs)
 
         self.title("Timestep Distribution")
-        self.geometry("1400x600")
+        self.geometry("1600x700")
         self.resizable(True, True)
 
         self.config = config
@@ -88,6 +88,7 @@ class TimestepDistributionWindow(ctk.CTkToplevel):
         self.image_axes = None
         self.image_canvas = None
         self.image_path_var = None
+        self.preview_mode_var = None
 
         self.grid_rowconfigure(0, weight=1)
         self.grid_columnconfigure(0, weight=1)
@@ -176,6 +177,18 @@ class TimestepDistributionWindow(ctk.CTkToplevel):
         
         components.button(frame, 7, 2, "Load from Concept", command=self.__load_random_concept_image,
                           tooltip="Load a random image from the first enabled concept")
+        
+        # Preview mode selector
+        components.label(frame, 8, 0, "Preview Mode",
+                         tooltip="Show Range: displays full spectrum from clean to max noise\nTraining Only: shows only timesteps within your training range")
+        self.preview_mode_var = ctk.StringVar(value="Show Range")
+        preview_mode_menu = ctk.CTkOptionMenu(
+            frame,
+            values=["Show Range", "Training Only"],
+            variable=self.preview_mode_var,
+            command=lambda _: self.__update_preview()
+        )
+        preview_mode_menu.grid(row=8, column=1, sticky="ew", padx=5, pady=5)
 
         # plot
         appearance_mode = AppearanceModeTracker.get_mode()
@@ -202,24 +215,25 @@ class TimestepDistributionWindow(ctk.CTkToplevel):
         ax.yaxis.label.set_color(text_color)
 
         # Image noise preview
-        fig2, axes2 = plt.subplots(2, 3, figsize=(6, 4))
+        fig2, axes2 = plt.subplots(2, 3, figsize=(9, 6))
         self.image_axes = axes2.flatten()
         self.image_canvas = FigureCanvasTkAgg(fig2, master=frame)
-        self.image_canvas.get_tk_widget().grid(row=0, column=4, rowspan=8)
+        self.image_canvas.get_tk_widget().grid(row=0, column=4, rowspan=10, padx=10, pady=10, sticky="nsew")
         
         fig2.set_facecolor(background_color)
+        fig2.tight_layout(pad=2.0)
         for ax_img in self.image_axes:
             ax_img.set_facecolor(background_color)
             ax_img.tick_params(colors=text_color)
-            ax_img.spines['bottom'].set_color(text_color)
-            ax_img.spines['left'].set_color(text_color)
-            ax_img.spines['top'].set_color(text_color)
-            ax_img.spines['right'].set_color(text_color)
+            ax_img.spines['bottom'].set_visible(False)
+            ax_img.spines['left'].set_visible(False)
+            ax_img.spines['top'].set_visible(False)
+            ax_img.spines['right'].set_visible(False)
 
         self.__update_preview()
 
         # update button
-        components.button(frame, 8, 3, "Update Preview", command=self.__update_preview)
+        components.button(frame, 9, 3, "Update Preview", command=self.__update_preview)
 
         frame.pack(fill="both", expand=1)
         return frame
@@ -298,15 +312,29 @@ class TimestepDistributionWindow(ctk.CTkToplevel):
                     min_t = int(self.config.min_noising_strength * 1000)
                     max_t = int(self.config.max_noising_strength * 1000)
                     
-                    # Sample 6 timesteps across the range
-                    timesteps = [
-                        0,  # Original
-                        min_t,
-                        min_t + (max_t - min_t) // 3,
-                        min_t + 2 * (max_t - min_t) // 3,
-                        max_t,
-                        1000  # Maximum noise
-                    ]
+                    # Determine timesteps based on preview mode
+                    preview_mode = self.preview_mode_var.get() if hasattr(self, 'preview_mode_var') else "Show Range"
+                    
+                    if preview_mode == "Training Only":
+                        # Show only timesteps within training range
+                        timesteps = [
+                            min_t,
+                            min_t + (max_t - min_t) // 5,
+                            min_t + 2 * (max_t - min_t) // 5,
+                            min_t + 3 * (max_t - min_t) // 5,
+                            min_t + 4 * (max_t - min_t) // 5,
+                            max_t
+                        ]
+                    else:
+                        # Show full range from clean to max noise
+                        timesteps = [
+                            0,  # Original
+                            min_t,
+                            min_t + (max_t - min_t) // 3,
+                            min_t + 2 * (max_t - min_t) // 3,
+                            max_t,
+                            1000  # Maximum noise
+                        ]
                     
                     for idx, (ax, timestep) in enumerate(zip(self.image_axes, timesteps)):
                         ax.cla()
