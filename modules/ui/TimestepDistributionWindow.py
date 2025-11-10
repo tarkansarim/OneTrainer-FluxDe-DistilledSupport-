@@ -181,7 +181,7 @@ class TimestepDistributionWindow(ctk.CTkToplevel):
         # Preview mode selector
         components.label(frame, 8, 0, "Preview Mode",
                          tooltip="Show Range: displays full spectrum from clean to max noise\nTraining Only: shows only timesteps within your training range")
-        self.preview_mode_var = ctk.StringVar(value="Show Range")
+        self.preview_mode_var = ctk.StringVar(value="Training Only")
         preview_mode_menu = ctk.CTkOptionMenu(
             frame,
             values=["Show Range", "Training Only"],
