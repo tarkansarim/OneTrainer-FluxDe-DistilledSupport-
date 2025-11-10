@@ -319,21 +319,38 @@ class TimestepDistributionWindow(ctk.CTkToplevel):
                         # Show one representative sample from training range
                         # Use the median timestep
                         median_t = (min_t + max_t) // 2
-                        timesteps = [median_t]
                         
-                        # Clear all axes and show single large image in center
+                        # Clear the entire figure and create a single large axes
                         for ax in self.image_axes:
-                            ax.cla()
-                            ax.axis('off')
+                            ax.remove()
                         
-                        # Use the center axes for the single image
-                        center_ax = self.image_axes[1]  # Top-middle position
+                        # Create one large subplot that fills the entire figure
+                        self.image_axes = [self.image_canvas.figure.add_subplot(1, 1, 1)]
+                        large_ax = self.image_axes[0]
+                        
                         display_img = self.__add_noise_to_image(image_tensor, median_t)
-                        center_ax.imshow(display_img)
-                        center_ax.set_title(f'Training Sample (t={median_t})', color='lime', fontweight='bold', fontsize=12)
-                        center_ax.axis('off')
+                        large_ax.imshow(display_img)
+                        large_ax.set_title(f'Training Sample (t={median_t})', color='lime', fontweight='bold', fontsize=14, pad=10)
+                        large_ax.axis('off')
+                        
+                        self.image_canvas.figure.tight_layout()
                         
                     elif preview_mode == "Training Only":
+                        # Recreate 2x3 grid if needed
+                        if len(self.image_axes) != 6:
+                            for ax in self.image_axes:
+                                ax.remove()
+                            self.image_axes = []
+                            for i in range(6):
+                                ax = self.image_canvas.figure.add_subplot(2, 3, i+1)
+                                ax.set_facecolor(self.image_canvas.figure.get_facecolor())
+                                ax.spines['bottom'].set_visible(False)
+                                ax.spines['left'].set_visible(False)
+                                ax.spines['top'].set_visible(False)
+                                ax.spines['right'].set_visible(False)
+                                self.image_axes.append(ax)
+                            self.image_canvas.figure.tight_layout(pad=2.0)
+                        
                         # Show only timesteps within training range
                         timesteps = [
                             min_t,
@@ -351,6 +368,21 @@ class TimestepDistributionWindow(ctk.CTkToplevel):
                             ax.set_title(f't={timestep}', color='lime', fontweight='bold', fontsize=9)
                             ax.axis('off')
                     else:
+                        # Recreate 2x3 grid if needed
+                        if len(self.image_axes) != 6:
+                            for ax in self.image_axes:
+                                ax.remove()
+                            self.image_axes = []
+                            for i in range(6):
+                                ax = self.image_canvas.figure.add_subplot(2, 3, i+1)
+                                ax.set_facecolor(self.image_canvas.figure.get_facecolor())
+                                ax.spines['bottom'].set_visible(False)
+                                ax.spines['left'].set_visible(False)
+                                ax.spines['top'].set_visible(False)
+                                ax.spines['right'].set_visible(False)
+                                self.image_axes.append(ax)
+                            self.image_canvas.figure.tight_layout(pad=2.0)
+                        
                         # Show full range from clean to max noise
                         timesteps = [
                             0,  # Original
