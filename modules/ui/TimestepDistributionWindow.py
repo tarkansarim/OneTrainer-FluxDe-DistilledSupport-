@@ -227,7 +227,7 @@ class TimestepDistributionWindow(ctk.CTkToplevel):
     def __load_random_concept_image(self):
         """Load a random image from the first enabled concept"""
         if not self.config.concepts:
-            print("No concepts configured. Please add a concept in the Concepts tab first.")
+            print("No concepts loaded from config file. Please use the 'Browse' button to select an image manually, or save your config and reload it to enable 'Load from Concept'.")
             return
             
         for concept in self.config.concepts:
@@ -245,7 +245,7 @@ class TimestepDistributionWindow(ctk.CTkToplevel):
                     self.__update_preview()
                     return
         
-        print("No images found in enabled concepts. Please configure a concept with training images first.")
+        print("No images found in enabled concepts. Please use the 'Browse' button to select an image manually.")
 
     def __add_noise_to_image(self, image_tensor: torch.Tensor, timestep: int) -> np.ndarray:
         """Add noise to an image at a specific timestep"""
