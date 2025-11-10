@@ -180,11 +180,11 @@ class TimestepDistributionWindow(ctk.CTkToplevel):
         
         # Preview mode selector
         components.label(frame, 8, 0, "Preview Mode",
-                         tooltip="Show Range: displays full spectrum from clean to max noise\nTraining Only: shows only timesteps within your training range")
-        self.preview_mode_var = ctk.StringVar(value="Training Only")
+                         tooltip="Single Sample: one representative image from your training range\nTraining Only: 6 samples across your training range\nShow Range: full spectrum from clean to max noise")
+        self.preview_mode_var = ctk.StringVar(value="Single Sample")
         preview_mode_menu = ctk.CTkOptionMenu(
             frame,
-            values=["Show Range", "Training Only"],
+            values=["Single Sample", "Training Only", "Show Range"],
             variable=self.preview_mode_var,
             command=lambda _: self.__update_preview()
         )
@@ -313,9 +313,27 @@ class TimestepDistributionWindow(ctk.CTkToplevel):
                     max_t = int(self.config.max_noising_strength * 1000)
                     
                     # Determine timesteps based on preview mode
-                    preview_mode = self.preview_mode_var.get() if hasattr(self, 'preview_mode_var') else "Show Range"
+                    preview_mode = self.preview_mode_var.get() if hasattr(self, 'preview_mode_var') else "Single Sample"
                     
-                    if preview_mode == "Training Only":
+                    if preview_mode == "Single Sample":
+                        # Show one representative sample from training range
+                        # Use the median timestep
+                        median_t = (min_t + max_t) // 2
+                        timesteps = [median_t]
+                        
+                        # Clear all axes and show single large image in center
+                        for ax in self.image_axes:
+                            ax.cla()
+                            ax.axis('off')
+                        
+                        # Use the center axes for the single image
+                        center_ax = self.image_axes[1]  # Top-middle position
+                        display_img = self.__add_noise_to_image(image_tensor, median_t)
+                        center_ax.imshow(display_img)
+                        center_ax.set_title(f'Training Sample (t={median_t})', color='lime', fontweight='bold', fontsize=12)
+                        center_ax.axis('off')
+                        
+                    elif preview_mode == "Training Only":
                         # Show only timesteps within training range
                         timesteps = [
                             min_t,
@@ -325,6 +343,13 @@ class TimestepDistributionWindow(ctk.CTkToplevel):
                             min_t + 4 * (max_t - min_t) // 5,
                             max_t
                         ]
+                        
+                        for idx, (ax, timestep) in enumerate(zip(self.image_axes, timesteps)):
+                            ax.cla()
+                            display_img = self.__add_noise_to_image(image_tensor, timestep)
+                            ax.imshow(display_img)
+                            ax.set_title(f't={timestep}', color='lime', fontweight='bold', fontsize=9)
+                            ax.axis('off')
                     else:
                         # Show full range from clean to max noise
                         timesteps = [
@@ -335,23 +360,23 @@ class TimestepDistributionWindow(ctk.CTkToplevel):
                             max_t,
                             1000  # Maximum noise
                         ]
-                    
-                    for idx, (ax, timestep) in enumerate(zip(self.image_axes, timesteps)):
-                        ax.cla()
-                        if timestep == 0:
-                            # Show original
-                            display_img = (image_tensor.squeeze(0) * 0.5 + 0.5).clamp(0, 1).permute(1, 2, 0).numpy()
-                        else:
-                            display_img = self.__add_noise_to_image(image_tensor, timestep)
                         
-                        ax.imshow(display_img)
-                        
-                        # Highlight if in training range
-                        in_range = min_t <= timestep <= max_t
-                        title_color = 'lime' if in_range else 'white'
-                        weight = 'bold' if in_range else 'normal'
-                        ax.set_title(f't={timestep}', color=title_color, fontweight=weight, fontsize=9)
-                        ax.axis('off')
+                        for idx, (ax, timestep) in enumerate(zip(self.image_axes, timesteps)):
+                            ax.cla()
+                            if timestep == 0:
+                                # Show original
+                                display_img = (image_tensor.squeeze(0) * 0.5 + 0.5).clamp(0, 1).permute(1, 2, 0).numpy()
+                            else:
+                                display_img = self.__add_noise_to_image(image_tensor, timestep)
+                            
+                            ax.imshow(display_img)
+                            
+                            # Highlight if in training range
+                            in_range = min_t <= timestep <= max_t
+                            title_color = 'lime' if in_range else 'white'
+                            weight = 'bold' if in_range else 'normal'
+                            ax.set_title(f't={timestep}', color=title_color, fontweight=weight, fontsize=9)
+                            ax.axis('off')
                     
                     self.image_canvas.draw()
                 except Exception as e:
