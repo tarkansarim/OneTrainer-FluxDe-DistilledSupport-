@@ -150,10 +150,30 @@ class TimestepDistributionWindow(ctk.CTkToplevel):
         # Image preview section
         components.label(frame, 7, 0, "Preview Image",
                          tooltip="Select an image from your concept to preview noise levels")
+        
+        # Create a simple file entry without UI state
+        image_frame = ctk.CTkFrame(frame, fg_color="transparent")
+        image_frame.grid(row=7, column=1, padx=0, pady=0, sticky="new")
+        image_frame.grid_columnconfigure(0, weight=1)
+        
         self.image_path_var = ctk.StringVar(value="")
-        image_entry = components.file_entry(frame, 7, 1, self.ui_state, "preview_image_path")
-        if hasattr(image_entry, 'textvariable'):
-            self.image_path_var = image_entry.textvariable
+        image_entry = ctk.CTkEntry(image_frame, textvariable=self.image_path_var)
+        image_entry.grid(row=0, column=0, sticky="ew", padx=(0, 5))
+        
+        def __open_file_dialog():
+            from tkinter import filedialog
+            file_path = filedialog.askopenfilename(
+                filetypes=[
+                    ("Image Files", "*.jpg *.jpeg *.png *.webp *.bmp"),
+                    ("All Files", "*.*")
+                ]
+            )
+            if file_path:
+                self.image_path_var.set(file_path)
+                self.__update_preview()
+        
+        ctk.CTkButton(image_frame, text="Browse", command=__open_file_dialog, width=80).grid(row=0, column=1)
+        
         components.button(frame, 7, 2, "Load from Concept", command=self.__load_random_concept_image,
                           tooltip="Load a random image from the first enabled concept")
 
