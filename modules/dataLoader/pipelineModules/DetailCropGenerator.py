@@ -134,13 +134,11 @@ class DetailCropGenerator(PipelineModule, RandomAccessPipelineModule):
         return outputs
 
     def start(self, variation: int):
-        self._debug(f"[Detail Crops] start() called with variation {variation}")
         super().clear_item_cache()
         self._init_internal_state()
         try:
             # Use image_path length to avoid triggering image decoding during length probing
             base_length = self._get_previous_length(self.image_path_name)
-            self._debug(f"[Detail Crops] Got upstream length: {base_length}")
         except Exception as exc:
             self._debug(
                 f"[Detail Crops] ERROR querying upstream length at variation {variation}: {exc}"
@@ -151,7 +149,24 @@ class DetailCropGenerator(PipelineModule, RandomAccessPipelineModule):
                 "[Detail Crops] Upstream reported zero base samples; the dataset will be empty. "
                 "Verify concept configuration, include_full_images, and blank-tile thresholds."
             )
-        self._reset_progress(f"[Detail Crops] Variation {variation}", base_length)
+        
+        # Check if detail crops are enabled for any concept to determine verbosity
+        any_crops_enabled = False
+        for base_index in range(min(base_length, 1)):  # Check first concept
+            try:
+                concept = self._get_previous_item(variation, self.concept_name, base_index)
+                detail_cfg = self._extract_detail_config(concept)
+                if detail_cfg.get('enabled', False) and detail_cfg.get('scales', []):
+                    any_crops_enabled = True
+                    break
+            except Exception:
+                pass
+        
+        if any_crops_enabled:
+            self._debug(f"[Detail Crops] start() called with variation {variation}")
+            self._debug(f"[Detail Crops] Got upstream length: {base_length}")
+            self._reset_progress(f"[Detail Crops] Variation {variation}", base_length)
+        
         rebuild_all = not self._entries_by_base
         new_entries: List[DetailEntry] = []
         summary_counts: Counter[str] = Counter()
@@ -221,7 +236,9 @@ class DetailCropGenerator(PipelineModule, RandomAccessPipelineModule):
             detail_count = sum(1 for entry in entries if entry.variant_type == 'detail')
             context_count = sum(1 for entry in entries if entry.variant_type == 'context')
             full_count = sum(1 for entry in entries if entry.variant_type == 'full')
-            if detail_count == 0 and context_count == 0:
+            
+            # Only show debug messages if crops are actually being generated
+            if any_crops_enabled and detail_count == 0 and context_count == 0:
                 concept_label = self._concept_label(concept)
                 include_full_flag = detail_cfg.get('include_full_images', True)
                 self._debug(
@@ -232,28 +249,34 @@ class DetailCropGenerator(PipelineModule, RandomAccessPipelineModule):
                     for log_entry in variant_logs:
                         self._debug(f"  Variant stats -> {log_entry}")
 
-            self._increment_progress()
+            if any_crops_enabled:
+                self._increment_progress()
 
         self._entries = new_entries
-        self._finalize_progress()
+        if any_crops_enabled:
+            self._finalize_progress()
+        
         detail_total = summary_counts.get('detail', 0)
         context_total = summary_counts.get('context', 0)
         full_total = summary_counts.get('full', 0)
-        self._debug(
-            f"[Detail Crops] Variation {variation} summary: "
-            f"base_images={base_length}, detail_tiles={detail_total}, "
-            f"context_tiles={context_total}, full_images={full_total}, total_entries={len(self._entries)}"
-        )
-        if len(self._entries) == 0:
+        
+        # Only show summary if crops are enabled
+        if any_crops_enabled:
             self._debug(
-                "[Detail Crops] WARNING: no crops generated for this variation. "
-                "Check tile scales, blank detection thresholds, and include_full_images settings."
+                f"[Detail Crops] Variation {variation} summary: "
+                f"base_images={base_length}, detail_tiles={detail_total}, "
+                f"context_tiles={context_total}, full_images={full_total}, total_entries={len(self._entries)}"
             )
-        elif detail_total == 0 and context_total == 0:
-            self._debug(
-                "[Detail Crops] NOTE: only full images are available for this variation. "
-                "If detail crops are required, adjust the detail crop configuration."
-            )
+            if len(self._entries) == 0:
+                self._debug(
+                    "[Detail Crops] WARNING: no crops generated for this variation. "
+                    "Check tile scales, blank detection thresholds, and include_full_images settings."
+                )
+            elif detail_total == 0 and context_total == 0:
+                self._debug(
+                    "[Detail Crops] NOTE: only full images are available for this variation. "
+                    "If detail crops are required, adjust the detail crop configuration."
+                )
 
     def get_item(self, variation: int, index: int, requested_name: str = None) -> dict:
         entry = self._entries[index]
