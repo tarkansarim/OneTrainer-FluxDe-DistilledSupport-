@@ -163,9 +163,23 @@ class DetailCropGenerator(PipelineModule, RandomAccessPipelineModule):
                 pass
         
         if any_crops_enabled:
-            self._debug(f"[Detail Crops] start() called with variation {variation}")
-            self._debug(f"[Detail Crops] Got upstream length: {base_length}")
-            self._reset_progress(f"[Detail Crops] Variation {variation}", base_length)
+            # Get scales from first enabled concept for display
+            scales_display = "base resolution"
+            try:
+                concept = self._get_previous_item(variation, self.concept_name, 0)
+                detail_cfg = self._extract_detail_config(concept)
+                scales = detail_cfg.get('scales', [])
+                if scales:
+                    scales_str = ", ".join(f"{s}x" for s in sorted(scales))
+                    scales_display = f"for {scales_str} tiled upscale training"
+                else:
+                    scales_display = "at base resolution"
+            except Exception:
+                pass
+            
+            self._debug(f"[Detail Crops] Generating tiled crops for epoch {variation} {scales_display}")
+            self._debug(f"[Detail Crops] Processing {base_length} base images")
+            self._reset_progress(f"[Detail Crops] Epoch {variation}", base_length)
         
         rebuild_all = not self._entries_by_base
         new_entries: List[DetailEntry] = []
@@ -263,7 +277,7 @@ class DetailCropGenerator(PipelineModule, RandomAccessPipelineModule):
         # Only show summary if crops are enabled
         if any_crops_enabled:
             self._debug(
-                f"[Detail Crops] Variation {variation} summary: "
+                f"[Detail Crops] Epoch {variation} summary: "
                 f"base_images={base_length}, detail_tiles={detail_total}, "
                 f"context_tiles={context_total}, full_images={full_total}, total_entries={len(self._entries)}"
             )
