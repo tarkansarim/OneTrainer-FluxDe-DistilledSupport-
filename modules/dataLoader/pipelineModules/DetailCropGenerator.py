@@ -171,7 +171,7 @@ class DetailCropGenerator(PipelineModule, RandomAccessPipelineModule):
                 scales = detail_cfg.get('scales', [])
                 if scales:
                     scales_str = ", ".join(f"{s}x" for s in sorted(scales))
-                    scales_display = f"for {scales_str} tiled upscale training"
+                    scales_display = f"for {scales_str} tiled upscale detail training"
                 else:
                     scales_display = "at base resolution"
             except Exception:
