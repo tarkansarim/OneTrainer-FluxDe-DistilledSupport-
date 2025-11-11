@@ -1,9 +1,9 @@
-# OneTrainer - Flux Dev Dedistilled Fork
+# OneTrainer Plus
 
 OneTrainer is a one-stop solution for all your Diffusion training needs.
 
 > [!NOTE]
-> **This fork adds complete support for Flux Dev Dedistilled models**, **fixes GPU selection in single-GPU mode**, **unlocks T5 token limit to 512**, **fixes Flux Dev sampling guidance**, and **adds block-wise learning rate control**. Includes traditional CFG during sampling, negative prompts, crash prevention, proper device index handling, extended prompt support, proper sample quality, and individual LR control for each Flux transformer block. All changes are automatic and backward-compatible. See [Flux Dev Dedistilled Support](#flux-dev-dedistilled-support) and [Additional Improvements](#additional-improvements-in-this-fork) sections below for details.
+> **This fork adds complete support for Flux Dev Dedistilled models**, **detail crop generation with Ollama-based captioning**, **fixes GPU selection in single-GPU mode**, **unlocks T5 token limit to 512**, **fixes Flux Dev sampling guidance**, and **adds block-wise learning rate control**. Includes traditional CFG during sampling, detail crop tiling with AI-generated captions, negative prompts, crash prevention, proper device index handling, extended prompt support, proper sample quality, and individual LR control for each Flux transformer block. All changes are automatic and backward-compatible. See [Detail Crop Captioning](#detail-crop-captioning), [Flux Dev Dedistilled Support](#flux-dev-dedistilled-support) and [Additional Improvements](#additional-improvements-in-this-fork) sections below for details.
 
 <a href="https://discord.gg/KwgcQd5scF"><img src="https://discord.com/api/guilds/1102003518203756564/widget.png" alt="OneTrainer Discord"/></a><br>
 
@@ -80,6 +80,67 @@ OneTrainer is a one-stop solution for all your Diffusion training needs.
 2. Pull changes `git pull`
 3. Activate the venv `venv/scripts/activate`
 4. Re-install all requirements `pip install -r requirements.txt --force-reinstall`
+
+## Detail Crop Captioning
+
+This fork includes a powerful **Detail Crop Generation and Captioning** system that automatically tiles high-resolution images and generates context-aware captions using local Ollama vision-language models.
+
+### What's Included
+
+- ✅ **Deterministic Tiling**: Automatically splits high-res images into detail crops at multiple scales
+- ✅ **Context Tiles**: Optional context tiles at base resolution for better training context
+- ✅ **Blank Detection**: Automatically skips crops with low detail (blank/uniform areas)
+- ✅ **Ollama Integration**: Generate captions using local vision-language models (e.g., qwen2.5vl:3b)
+- ✅ **Upfront Generation**: All captions pre-generated before training starts for consistent experience
+- ✅ **Disk Export**: Optionally save crops and captions to disk for inspection
+- ✅ **Smart Prompts**: Crops without generated captions use empty strings (avoids misleading parent captions)
+- ✅ **Proper Cache Clearing**: Automatically clears old crops/captions when "Clear cache before training" is enabled
+- ✅ **Multi-Concept Support**: Each concept can have independent detail crop settings
+
+### Key Features
+
+**For Training:**
+- Train on high-resolution details without VRAM limitations
+- Multiple scale factors (e.g., 2x, 4x) for multi-scale detail learning
+- Probabilistic captioning (e.g., 30% get captions, 70% use empty prompts)
+- Per-concept configuration (enable detail crops for specific concepts only)
+
+**For Captioning:**
+- Local Ollama server integration (no API costs)
+- Automatic model pulling if model isn't available
+- Configurable system and user prompts for caption style
+- Context-aware captioning (uses parent image caption as context)
+- Retry logic and timeout handling for reliability
+
+### Usage
+
+1. **Enable Detail Crops** for a concept in the "detail crops" tab
+2. **Configure Scales**: Set comma-separated scales (e.g., `2, 4` for 2x and 4x)
+3. **Enable Captioning**: Turn on "Enable Captioning" and set probability (e.g., `0.3` for 30%)
+4. **Configure Ollama**: Set model name (e.g., `qwen2.5vl:3b`), endpoint, and prompts
+5. **Optional Disk Save**: Enable "Save Crops to Disk" and set directory to export crops/captions
+6. **Train**: Start training - crops and captions are generated automatically
+
+### Technical Details
+
+**Pipeline Modules:**
+- `DetailCropGenerator`: Generates deterministic tiled crops from high-res images
+- `CropCaptionGenerator`: Generates captions via Ollama for detail crops
+- `ollama_manager`: Manages Ollama server lifecycle during training
+
+**Caption Generation:**
+- Pre-generated upfront during `start_next_epoch()` before training begins
+- Uses deterministic selection based on crop hash for consistent probability across epochs
+- Saves to `{save_directory}/epoch-{N}/{crop_type}_scale-{scale}/` structure
+- Empty prompts for uncaptioned crops prevent misleading training signals
+
+### Files Added/Modified
+
+- `modules/dataLoader/pipelineModules/DetailCropGenerator.py` - Detail crop generation
+- `modules/dataLoader/pipelineModules/CropCaptionGenerator.py` - Ollama captioning
+- `modules/util/ollama_manager.py` - Ollama server management
+- `modules/dataLoader/FluxBaseDataLoader.py` - Caption output integration
+- `modules/trainer/GenericTrainer.py` - Proper cache clearing with concept file loading
 
 ## Flux Dev Dedistilled Support
 
