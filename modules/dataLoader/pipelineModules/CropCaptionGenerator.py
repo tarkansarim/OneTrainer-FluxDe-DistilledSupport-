@@ -6,6 +6,7 @@ import os
 import subprocess
 import sys
 import time
+import traceback
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout
 from contextlib import suppress
 from typing import Any, Dict, Iterable, List, Optional, Tuple
@@ -64,6 +65,7 @@ class CropCaptionGenerator(PipelineModule, RandomAccessPipelineModule):
         self._warned_missing_save_dir: set[str] = set()
         self._has_shutdown_ollama: bool = False
         self._length_calculation_mode: bool = False
+        self._pregeneration_complete: bool = False
 
     def clear_item_cache(self):
         super().clear_item_cache()
@@ -131,10 +133,12 @@ class CropCaptionGenerator(PipelineModule, RandomAccessPipelineModule):
                     
                     print(f"[Detail Captions] Pre-generation complete. Metrics: {self._metrics}")
                     sys.stdout.flush()
+                    self._pregeneration_complete = True
         except Exception as e:
             print(f"[Detail Captions] Error during pre-generation: {e}")
             traceback.print_exc()
             sys.stdout.flush()
+            self._pregeneration_complete = True  # Set flag even on error to prevent infinite retries
 
     def get_item(self, variation: int, index: int, requested_name: str = None) -> Dict[str, Any]:
         # Compute caption output name (may be called before __init__ completes)
@@ -213,6 +217,23 @@ class CropCaptionGenerator(PipelineModule, RandomAccessPipelineModule):
 
         regenerate_each_epoch = detail_cfg.get('regenerate_each_epoch', False)
         caption = self._memory_cache.get(cache_key)
+        
+        # If pre-generation is complete, only use cached/disk captions, don't generate new ones
+        if self._pregeneration_complete and caption is None:
+            caption = self._load_caption_file(data, detail_cfg)
+            if caption is not None:
+                caption = self._sanitize_caption(caption)
+                self._memory_cache[cache_key] = caption
+                self._record_metric('reused')
+            else:
+                # Pre-generation already ran, don't generate during training
+                self._record_metric('skipped_probability')
+                data[self.prompt_name] = ""
+                data[caption_out_name] = ""
+                return self._finalize_output(data, detail_cfg)
+            data[self.prompt_name] = caption
+            data[caption_out_name] = caption
+            return self._finalize_output(data, detail_cfg)
 
         if not regenerate_each_epoch and variation > 0:
             if caption is None:
