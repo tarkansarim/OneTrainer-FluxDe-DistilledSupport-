@@ -94,7 +94,7 @@ class TopBar:
                 ("PixArt Sigma", ModelType.PIXART_SIGMA),
                 ("Flux Dev", ModelType.FLUX_DEV_1),
                 ("Flux Fill Dev", ModelType.FLUX_FILL_DEV_1),
-                ("Flux Dev (SRPO)", ModelType.FLUX_SRPO_DEV),
+                ("Flux Dev (SRPO) - WIP/Non-functional", ModelType.FLUX_SRPO_DEV),
                 ("Sana", ModelType.SANA),
                 ("Hunyuan Video", ModelType.HUNYUAN_VIDEO),
                 ("HiDream Full", ModelType.HI_DREAM_FULL),
@@ -232,7 +232,9 @@ class TopBar:
                 if is_built_in_preset:
                     # always assume built-in configs are saved in the most recent version
                     loaded_dict["__version"] = default_config.config_version
-                loaded_config = default_config.from_dict(loaded_dict).to_unpacked_config()
+                loaded_config_with_samples = default_config.from_dict(loaded_dict)
+                loaded_config_with_samples.persist_samples_to_file()
+                loaded_config = loaded_config_with_samples.to_unpacked_config()
 
             with suppress(FileNotFoundError), open("secrets.json", "r") as f:
                 secrets_dict=json.load(f)
