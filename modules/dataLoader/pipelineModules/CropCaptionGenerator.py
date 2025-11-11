@@ -97,7 +97,7 @@ class CropCaptionGenerator(PipelineModule, RandomAccessPipelineModule):
         self._flush_metrics()
         self._current_variation = variation
         self._metrics = self._new_metrics()
-        self._reset_progress(f"[Detail Captions] Variation {variation}", self.length())
+        self._reset_progress(f"[Detail Captions] Epoch {variation}", self.length())
         self._has_shutdown_ollama = False
         super().clear_item_cache()
         
@@ -108,7 +108,8 @@ class CropCaptionGenerator(PipelineModule, RandomAccessPipelineModule):
                 concept0 = self._get_previous_item(variation, self.concept_name, 0)
                 detail_cfg = DetailCropGenerator._extract_detail_config(concept0)
                 if detail_cfg.get('enable_captioning', False) and detail_cfg.get('caption_probability', 0.0) > 0.0:
-                    print(f"[Detail Captions] Pre-generating captions for {total} items...")
+                    prob_pct = int(detail_cfg.get('caption_probability', 0.0) * 100)
+                    print(f"[Detail Captions] Generating captions for epoch {variation} (~{prob_pct}% of {total} crops)...")
                     sys.stdout.flush()
                     
                     with suppress(Exception):
