@@ -83,7 +83,7 @@ OneTrainer is a one-stop solution for all your Diffusion training needs.
 
 ## Detail Crop Captioning
 
-This fork includes a powerful **Detail Crop Generation and Captioning** system that automatically tiles high-resolution images and generates context-aware captions using local Ollama vision-language models.
+This fork includes a powerful **Detail Crop Generation and Captioning** system designed for **training tiled upscaling for rich skin and material details**. It automatically tiles high-resolution images and generates context-aware captions using local Ollama vision-language models, enabling high-quality detail learning without VRAM limitations.
 
 ### What's Included
 
