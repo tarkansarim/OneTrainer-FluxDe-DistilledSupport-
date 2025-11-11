@@ -69,13 +69,14 @@ class FluxBaseDataLoader(
     def _preparation_modules(self, config: TrainConfig, model: FluxModel):
         rescale_image = RescaleImageChannels(image_in_name='image', image_out_name='image', in_range_min=0, in_range_max=1, out_range_min=-1, out_range_max=1)
         rescale_conditioning_image = RescaleImageChannels(image_in_name='conditioning_image', image_out_name='conditioning_image', in_range_min=0, in_range_max=1, out_range_min=-1, out_range_max=1)
-        encode_image = EncodeVAE(in_name='image', out_name='latent_image_distribution', vae=model.vae, autocast_contexts=[model.autocast_context], dtype=model.train_dtype.torch_dtype())
+        # Use VAE-safe autocast context and dtype (typically float32)
+        encode_image = EncodeVAE(in_name='image', out_name='latent_image_distribution', vae=model.vae, autocast_contexts=[model.vae_autocast_context], dtype=model.vae_train_dtype.torch_dtype())
         image_sample = SampleVAEDistribution(in_name='latent_image_distribution', out_name='latent_image', mode='mean')
         downscale_mask = ScaleImage(in_name='mask', out_name='latent_mask', factor=0.125)
         add_embeddings_to_prompt_1 = MapData(in_name='prompt', out_name='prompt_1', map_fn=model.add_text_encoder_1_embeddings_to_prompt)
         add_embeddings_to_prompt_2 = MapData(in_name='prompt', out_name='prompt_2', map_fn=model.add_text_encoder_2_embeddings_to_prompt)
         shuffle_mask_channels = ShuffleFluxFillMaskChannels(in_name='mask', out_name='latent_mask')
-        encode_conditioning_image = EncodeVAE(in_name='conditioning_image', out_name='latent_conditioning_image_distribution', vae=model.vae, autocast_contexts=[model.autocast_context], dtype=model.train_dtype.torch_dtype())
+        encode_conditioning_image = EncodeVAE(in_name='conditioning_image', out_name='latent_conditioning_image_distribution', vae=model.vae, autocast_contexts=[model.vae_autocast_context], dtype=model.vae_train_dtype.torch_dtype())
         conditioning_image_sample = SampleVAEDistribution(in_name='latent_conditioning_image_distribution', out_name='latent_conditioning_image', mode='mean')
         tokenize_prompt_1 = Tokenize(in_name='prompt_1', tokens_out_name='tokens_1', mask_out_name='tokens_mask_1', tokenizer=model.tokenizer_1, max_token_length=model.tokenizer_1.model_max_length)
         tokenize_prompt_2 = Tokenize(in_name='prompt_2', tokens_out_name='tokens_2', mask_out_name='tokens_mask_2', tokenizer=model.tokenizer_2, max_token_length=model.tokenizer_1.model_max_length)
@@ -189,7 +190,22 @@ class FluxBaseDataLoader(
             'tokens_1', 'tokens_2',
             'tokens_mask_1', 'tokens_mask_2',
             'original_resolution', 'crop_resolution', 'crop_offset',
+            'detail_crop_type', 'detail_crop_scale',
+            'detail_crop_index', 'detail_crop_coords',
+            'detail_crop_source_resolution', 'detail_crop_prompt_context',
         ]
+
+        # Check if any concept has captioning enabled
+        captioning_enabled = False
+        if config.concepts:
+            for concept in config.concepts:
+                detail_cfg = getattr(getattr(concept, 'image', None), 'detail_crops', None)
+                if detail_cfg and getattr(detail_cfg, 'enable_captioning', False):
+                    captioning_enabled = True
+                    break
+        
+        if captioning_enabled:
+            output_names.append('prompt_caption')
 
         if config.masked_training or config.model_type.has_mask_input():
             output_names.append('latent_mask')
@@ -215,8 +231,8 @@ class FluxBaseDataLoader(
             before_cache_image_fun=before_cache_image_fun,
             use_conditioning_image=True,
             vae=model.vae,
-            autocast_context=[model.autocast_context],
-            train_dtype=model.train_dtype,
+            autocast_context=[model.vae_autocast_context],
+            train_dtype=model.vae_train_dtype,
         )
 
     def _debug_modules(self, config: TrainConfig, model: FluxModel):
@@ -225,8 +241,8 @@ class FluxBaseDataLoader(
         def before_save_fun():
             model.vae_to(self.train_device)
 
-        decode_image = DecodeVAE(in_name='latent_image', out_name='decoded_image', vae=model.vae, autocast_contexts=[model.autocast_context], dtype=model.train_dtype.torch_dtype())
-        decode_conditioning_image = DecodeVAE(in_name='latent_conditioning_image', out_name='decoded_conditioning_image', vae=model.vae, autocast_contexts=[model.autocast_context], dtype=model.train_dtype.torch_dtype())
+        decode_image = DecodeVAE(in_name='latent_image', out_name='decoded_image', vae=model.vae, autocast_contexts=[model.vae_autocast_context], dtype=model.vae_train_dtype.torch_dtype())
+        decode_conditioning_image = DecodeVAE(in_name='latent_conditioning_image', out_name='decoded_conditioning_image', vae=model.vae, autocast_contexts=[model.vae_autocast_context], dtype=model.vae_train_dtype.torch_dtype())
         upscale_mask = ScaleImage(in_name='latent_mask', out_name='decoded_mask', factor=8)
         decode_prompt = DecodeTokens(in_name='tokens_1', out_name='decoded_prompt', tokenizer=model.tokenizer_1)
         save_image = SaveImage(image_in_name='decoded_image', original_path_in_name='image_path', path=debug_dir, in_range_min=-1, in_range_max=1, before_save_fun=before_save_fun)
@@ -266,6 +282,7 @@ class FluxBaseDataLoader(
     ):
         enumerate_input = self._enumerate_input_modules(config)
         load_input = self._load_input_modules(config, model.train_dtype)
+        detail_crops = self._detail_crop_modules(config)
         mask_augmentation = self._mask_augmentation_modules(config)
         aspect_bucketing_in = self._aspect_bucketing_in(config, 64)
         crop_modules = self._crop_modules(config)
@@ -283,6 +300,7 @@ class FluxBaseDataLoader(
             [
                 enumerate_input,
                 load_input,
+                detail_crops,
                 mask_augmentation,
                 aspect_bucketing_in,
                 crop_modules,

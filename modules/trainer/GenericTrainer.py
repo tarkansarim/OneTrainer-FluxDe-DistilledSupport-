@@ -93,8 +93,10 @@ class GenericTrainer(BaseTrainer):
         if multi.is_master():
             self.__save_config_to_workspace()
 
-            if self.config.clear_cache_before_training and self.config.latent_caching:
+            if self.config.clear_cache_before_training:
+                # Clear any cached artifacts prior to training if requested
                 self.__clear_cache()
+                self.__clear_detail_crop_exports()
         
         # Ensure all processes wait for cache clearing to complete before proceeding
         if multi.is_enabled():
@@ -227,6 +229,18 @@ class GenericTrainer(BaseTrainer):
             )
             if multi.is_enabled():
                 print(f"[Rank {multi.rank()}] Data loader created successfully")
+
+        dataset = self.data_loader.get_data_set()
+        approximate_length = dataset.approximate_length()
+
+        print(f"[DataLoader] Training dataset approximate length: {approximate_length}")
+        sys.stdout.flush()
+        if approximate_length == 0:
+            print(
+                "[DataLoader] WARNING: dataset length is zero. No training batches will be processed. "
+                "Verify detail crop configuration, filters, and include_full_images settings."
+            )
+            sys.stdout.flush()
         
         self.model_saver = self.create_model_saver()
 
@@ -260,6 +274,74 @@ class GenericTrainer(BaseTrainer):
                 path = os.path.join(self.config.cache_dir, filename)
                 if os.path.isdir(path) and (filename.startswith('epoch-') or filename in ['image', 'text']):
                     shutil.rmtree(path)
+
+    def __clear_detail_crop_exports(self):
+        concepts = getattr(self.config, "concepts", None)
+        
+        # If concepts aren't embedded in config, load from concept file
+        if not concepts:
+            concept_file = getattr(self.config, "concept_file_name", None)
+            if concept_file and os.path.exists(concept_file):
+                print(f"[Clear Detail Crops] Loading concepts from file: {concept_file}")
+                try:
+                    import json
+                    from modules.util.config.ConceptConfig import ConceptConfig
+                    with open(concept_file, 'r') as f:
+                        raw_concepts = json.load(f)
+                        concepts = [ConceptConfig.default_values().from_dict(c) for c in raw_concepts]
+                except Exception as e:
+                    print(f"[Clear Detail Crops] Failed to load concepts from file: {e}")
+                    return
+            else:
+                print("[Clear Detail Crops] No concepts found and no concept file, skipping clearing")
+                return
+
+        cleared_dirs: set[Path] = set()
+
+        for concept_idx, concept in enumerate(concepts):
+            detail_cfg = getattr(getattr(concept, "image", None), "detail_crops", None)
+            if detail_cfg is None:
+                print(f"[Clear Detail Crops] Concept {concept_idx}: no detail_crops config, skipping")
+                continue
+            
+            enabled = getattr(detail_cfg, "enabled", False)
+            save_to_disk = getattr(detail_cfg, "save_to_disk", False)
+            print(f"[Clear Detail Crops] Concept {concept_idx}: enabled={enabled}, save_to_disk={save_to_disk}")
+            
+            # Check if detail crops are enabled (regardless of save_to_disk)
+            if not enabled:
+                print(f"[Clear Detail Crops] Concept {concept_idx}: detail crops not enabled, skipping")
+                continue
+
+            candidate_dirs: list[Path] = []
+            save_dir = (getattr(detail_cfg, "save_directory", "") or "").strip()
+            if save_dir:
+                print(f"[Clear Detail Crops] Concept {concept_idx}: save_directory={save_dir}")
+                candidate_dirs.append(Path(save_dir))
+            else:
+                default_dir = Path(self.config.debug_dir) / "detail_crops"
+                print(f"[Clear Detail Crops] Concept {concept_idx}: using default directory={default_dir}")
+                candidate_dirs.append(default_dir)
+
+            for directory in candidate_dirs:
+                resolved = Path(directory).expanduser()
+                if not resolved.is_absolute():
+                    resolved = Path(self.config.workspace_dir) / resolved
+                try:
+                    resolved = resolved.resolve()
+                except OSError:
+                    continue
+
+                if resolved in cleared_dirs:
+                    continue
+                if not resolved.exists() or not resolved.is_dir():
+                    continue
+                workspace_root = Path(self.config.workspace_dir).resolve()
+                if resolved == workspace_root:
+                    continue
+                print(f"Clearing detail crop directory {resolved}")
+                shutil.rmtree(resolved, ignore_errors=True)
+                cleared_dirs.add(resolved)
 
     def __prune_backups(self, backups_to_keep: int):
         backup_dirpath = Path(self.config.workspace_dir) / "backup"
@@ -729,11 +811,35 @@ class GenericTrainer(BaseTrainer):
             #call start_next_epoch with only one process at first, because it might write to the cache. All subsequent processes can read in parallel:
             for _ in multi.master_first():
                 if self.config.latent_caching:
-                    self.data_loader.get_data_set().start_next_epoch()
+                    print("[Trainer] Calling start_next_epoch() with latent_caching enabled...")
+                    sys.stdout.flush()
+                    try:
+                        self.data_loader.get_data_set().start_next_epoch()
+                        print("[Trainer] start_next_epoch() completed, setting up train device...")
+                        sys.stdout.flush()
+                    except Exception as e:
+                        print(f"[Trainer] ERROR in start_next_epoch(): {e}")
+                        traceback.print_exc()
+                        sys.stdout.flush()
+                        raise
                     self.model_setup.setup_train_device(self.model, self.config)
+                    print("[Trainer] setup_train_device() completed")
+                    sys.stdout.flush()
                 else:
+                    print("[Trainer] Setting up train device first (no latent_caching)...")
+                    sys.stdout.flush()
                     self.model_setup.setup_train_device(self.model, self.config)
-                    self.data_loader.get_data_set().start_next_epoch()
+                    print("[Trainer] Calling start_next_epoch()...")
+                    sys.stdout.flush()
+                    try:
+                        self.data_loader.get_data_set().start_next_epoch()
+                        print("[Trainer] start_next_epoch() completed")
+                        sys.stdout.flush()
+                    except Exception as e:
+                        print(f"[Trainer] ERROR in start_next_epoch(): {e}")
+                        traceback.print_exc()
+                        sys.stdout.flush()
+                        raise
 
             if self.config.debug_mode:
                 multi.warn_parameter_divergence(self.parameters, train_device)

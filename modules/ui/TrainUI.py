@@ -3,18 +3,20 @@ import datetime
 import json
 import os
 import platform
+import shutil
 import subprocess
 import sys
 import threading
 import time
 import traceback
+import uuid
 import webbrowser
 from collections.abc import Callable
 from contextlib import suppress
 from pathlib import Path
 from tkinter import filedialog
 
-import scripts.generate_debug_report
+# import scripts.generate_debug_report
 from modules.ui.AdditionalEmbeddingsTab import AdditionalEmbeddingsTab
 from modules.ui.CaptionUI import CaptionUI
 from modules.ui.CloudTab import CloudTab
@@ -29,6 +31,7 @@ from modules.ui.TopBar import TopBar
 from modules.ui.TrainingTab import TrainingTab
 from modules.ui.VideoToolUI import VideoToolUI
 from modules.util import create
+from modules.util import ollama_manager
 from modules.util.callbacks.TrainCallbacks import TrainCallbacks
 from modules.util.commands.TrainCommands import TrainCommands
 from modules.util.config.TrainConfig import TrainConfig
@@ -775,38 +778,85 @@ class TrainUI(ctk.CTk):
 
     def __training_thread_function(self):
         error_caught = False
+        trainer = None
+        sample_snapshot_path = None
 
-        self.training_callbacks = TrainCallbacks(
-            on_update_train_progress=self.on_update_train_progress,
-            on_update_status=self.on_update_status,
-            on_update_cloud_connection=self._on_cloud_connection_update,
-        )
-
-        trainer = create.create_trainer(self.train_config, self.training_callbacks, self.training_commands, reattach=self.cloud_tab.reattach)
         try:
+            self.training_callbacks = TrainCallbacks(
+                on_update_train_progress=self.on_update_train_progress,
+                on_update_status=self.on_update_status,
+                on_update_cloud_connection=self._on_cloud_connection_update,
+            )
+
+            train_config = TrainConfig.default_values().from_dict(self.train_config.to_dict())
+            try:
+                sample_snapshot_path = self._snapshot_sample_definition(train_config)
+            except Exception:
+                traceback.print_exc()
+                self.on_update_status("Warning: failed to isolate sampling prompts; continuing with shared configuration")
+
+            trainer = create.create_trainer(
+                train_config,
+                self.training_callbacks,
+                self.training_commands,
+                reattach=self.cloud_tab.reattach,
+            )
+
+            try:
+                ollama_manager.prepare(
+                    train_config.train_device,
+                    getattr(train_config, "device_indexes", ""),
+                    bool(getattr(train_config, "multi_gpu", False)),
+                )
+            except Exception as exc:
+                traceback.print_exc()
+                self.on_update_status(f"Warning: failed to restart Ollama with training GPU ({exc})")
+
             trainer.start()
             self._schedule_cloud_ui_refresh()
             self.start_time = time.monotonic()
             trainer.train()
-        except Exception:
+        except Exception as e:
             self._schedule_cloud_ui_refresh()
             error_caught = True
+            print(f"\n{'='*80}")
+            print(f"TRAINING ERROR CAUGHT:")
+            print(f"{'='*80}")
             traceback.print_exc()
+            print(f"{'='*80}\n")
+            sys.stdout.flush()
+        finally:
+            trained_any_steps = bool(trainer) and getattr(trainer, "one_step_trained", False)
 
-        trainer.end()
+            if trainer is not None:
+                with suppress(Exception):
+                    trainer.end()
+            with suppress(Exception):
+                ollama_manager.cleanup()
+            if sample_snapshot_path:
+                with suppress(Exception):
+                    os.remove(sample_snapshot_path)
 
         # clear gpu memory
-        del trainer
+            if trainer is not None:
+                with suppress(Exception):
+                    del trainer
+                    trainer = None
 
         self.training_thread = None
         self.training_commands = None
-        torch.clear_autocast_cache()
-        torch_gc()
+        with suppress(Exception):
+            torch.clear_autocast_cache()
+            torch_gc()
 
         if error_caught:
-            self.on_update_status("Error: check the console for details")
+            status_message = "Error: check the console for details"
+        elif not trained_any_steps:
+            status_message = "Stopped: no training batches were processed; check your dataset and detail crop settings"
         else:
-            self.on_update_status("Stopped")
+            status_message = "Stopped"
+
+        self.on_update_status(status_message)
         self.delete_eta_label()
 
         # queue UI update on Tk main thread; _set_training_button_idle applies shared styles, avoid potential race/crash
@@ -814,6 +864,25 @@ class TrainUI(ctk.CTk):
 
         if self.train_config.tensorboard_always_on and not self.always_on_tensorboard_subprocess:
             self.after(0, self._start_always_on_tensorboard)
+
+    def _snapshot_sample_definition(self, config: TrainConfig) -> str | None:
+        sample_path = config.sample_definition_file_name
+        if not sample_path:
+            return None
+
+        abs_sample_path = os.path.abspath(sample_path)
+        if not os.path.isfile(abs_sample_path):
+            return None
+
+        workspace_dir = config.workspace_dir or "."
+        abs_workspace_dir = os.path.abspath(workspace_dir)
+        snapshots_dir = os.path.join(abs_workspace_dir, "tmp", "samples")
+        os.makedirs(snapshots_dir, exist_ok=True)
+
+        snapshot_path = os.path.join(snapshots_dir, f"samples-{uuid.uuid4().hex}.json")
+        shutil.copy2(abs_sample_path, snapshot_path)
+        config.sample_definition_file_name = snapshot_path
+        return snapshot_path
 
     def _schedule_cloud_ui_refresh(self):
         if not self.train_config.cloud.enabled:
@@ -913,7 +982,9 @@ class TrainUI(ctk.CTk):
                 
                 # Create default config and load from dict
                 default_config = TrainConfig.default_values()
-                loaded_config = default_config.from_dict(loaded_dict).to_unpacked_config()
+                loaded_config_with_samples = default_config.from_dict(loaded_dict)
+                loaded_config_with_samples.persist_samples_to_file()
+                loaded_config = loaded_config_with_samples.to_unpacked_config()
                 
                 # Load secrets if available
                 with suppress(FileNotFoundError), open("secrets.json", "r") as f:

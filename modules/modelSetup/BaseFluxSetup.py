@@ -83,10 +83,14 @@ class BaseFluxSetup(
                 ],
                 config.enable_autocast_cache,
             )
+        # Keep VAE ops in float32 to avoid conv2d bias/input dtype mismatches when training dtype is BF16
+        model.vae_autocast_context = torch.autocast(device_type=self.train_device.type, enabled=False)
+        from modules.util.enum.DataType import DataType
+        model.vae_train_dtype = DataType.FLOAT_32
 
         quantize_layers(model.text_encoder_1, self.train_device, model.train_dtype)
         quantize_layers(model.text_encoder_2, self.train_device, model.text_encoder_2_train_dtype)
-        quantize_layers(model.vae, self.train_device, model.train_dtype)
+        quantize_layers(model.vae, self.train_device, model.vae_train_dtype)
         quantize_layers(model.transformer, self.train_device, model.train_dtype)
 
     def _setup_embeddings(
