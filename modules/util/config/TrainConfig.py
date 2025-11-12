@@ -30,6 +30,7 @@ from modules.util.enum.TrainingMethod import TrainingMethod
 from modules.util.enum.VideoFormat import VideoFormat
 from modules.util.ModelNames import EmbeddingName, ModelNames
 from modules.util.ModelWeightDtypes import ModelWeightDtypes
+from modules.util.path_util import write_json_atomic
 from modules.util.torch_util import default_device
 
 
@@ -1050,6 +1051,27 @@ class TrainConfig(BaseConfig):
         config.concepts = None
         config.samples = None
         return config
+
+    def persist_samples_to_file(self) -> None:
+        if self.samples is None:
+            return
+
+        sample_path = self.sample_definition_file_name
+        if not sample_path:
+            return
+
+        directory = os.path.dirname(sample_path)
+        if directory:
+            os.makedirs(directory, exist_ok=True)
+
+        samples_payload = []
+        for sample in self.samples:
+            if isinstance(sample, SampleConfig):
+                samples_payload.append(sample.to_dict())
+            elif isinstance(sample, dict):
+                samples_payload.append(sample)
+        write_json_atomic(sample_path, samples_payload)
+        self.samples = None
 
     @staticmethod
     def default_values() -> 'TrainConfig':

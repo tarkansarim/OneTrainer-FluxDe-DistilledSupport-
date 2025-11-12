@@ -108,28 +108,32 @@ reduces the quality, while providing a significant speed boost.
 Your training images will be resized to that resolution when training. You don't need to do any manual resizing. You can
 specify multiple resolutions as a comma-separated list. All resolutions will be trained at the same time.
 
-### Masked training
+### Detail Crop Generation
 
-With masked training, you can instruct the model to only learn from some parts of your training images. For example, if
-you want to train a subject, but not the background, this setting will help. To enable masked training, you need to add
-a mask for every training image. This mask is binary image (black-and-white), where white regions define what should be
-included, and black regions are excluded. The files need the same name as the images, with an added `-masklabel.png`
-extension.
+To preserve small-area detail in very large source images, each concept now exposes `image.detail_crops`. When enabled,
+OneTrainer will derive additional tiles every epoch directly from the high-resolution originals instead of relying on
+pre-generated folders.
 
-### Sampling
-
-Here you can define prompts to regularly sample the model during training. The results will be displayed in tensorboard
-and also saved in the workspace directory.
-
-### Backup and Continue
-
-On the backup tab, you can configure regular backups that will be created during the training run. These backups are
-saved in the workspace.
-
-Additionally, you can decide to create a backup at the end of the training run. They
-contain all the model data to continue the training run. To continue the training from a previous backup, just select
-the backup directory as your base model.
-
-A backup can be converted to a model file by using the model convert tool.
-
-Note: Backups are **NOT** to be used externally in tools like Forge, SwarmUI etc they will not work. Utilise saves.
+- `enabled`: toggles the feature per concept. If disabled, the loader behaves exactly as before.
+- `tile_resolution`: square size (in pixels) for each crop. This is typically set to match the training resolution
+  (e.g. 1024).
+- `overlap`: pixels that neighbouring tiles share. The loader uses dynamic overlap to keep edge tiles full sized while
+  avoiding duplicates.
+- `blank_std_threshold` / `blank_edge_threshold`: thresholds used to skip near-empty crops.
+- `scales`: list of upscale factors (e.g. `[2, 4]`). For each factor, the loader first resizes the image to
+  `training_resolution * factor` and then extracts `tile_resolution` crops, mirroring tiled upscaling passes.
+- `include_context_tiles`: also slice a version of the image resized back to `tile_resolution` so the model still sees
+  full-scene context.
+- `include_full_images`: keep the original full-frame image in the dataset alongside the generated tiles. Disable if you
+  want the concept to train purely on crops.
+- `regenerate_each_epoch`: re-run the tiling pass every epoch. Leave disabled to reuse the cached grid for faster
+  training when the layout doesn’t change.
+- `enable_captioning`: when enabled, generates captions for crops on the fly through a local Ollama instance.
+- `caption_probability`: fraction of detail crops that should receive generated captions (0.0–1.0).
+- `caption_model`: Ollama model tag to call (default `qwen2.5vl:3b`).
+- `caption_system_prompt` / `caption_user_prompt`: prompt templates used for the vision-language model; `{context}` will be
+  replaced with the source image caption.
+- `caption_endpoint`, `caption_timeout`, `caption_max_retries`: HTTP endpoint and reliability settings (`caption_timeout`
+  defaults to 120s, `caption_max_retries` to 4). Captions are written
+- `caption_auto_pull`: when enabled, automatically runs `
+- `parallel_workers`: CPU workers used when generating tiles. Set to 0 to pick an automatic value based on available cores.

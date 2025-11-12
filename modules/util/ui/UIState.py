@@ -3,7 +3,7 @@ import tkinter as tk
 from collections.abc import Callable
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any
+from typing import Any, get_args, get_origin
 
 from modules.util.config.BaseConfig import BaseConfig
 from modules.util.type_util import issubclass_safe
@@ -165,6 +165,43 @@ class UIState:
 
         return update
 
+    def __set_list_var(self, obj, is_dict, name, var, element_type):
+        if element_type is None:
+            element_type = str
+
+        def convert(value: str):
+            if element_type is int:
+                return int(value)
+            if element_type is float:
+                return float(value)
+            return value
+
+        def update(_0, _1, _2):
+            raw = var.get()
+            values = []
+            if raw.strip():
+                parts = [part.strip() for part in raw.split(',')]
+                for part in parts:
+                    if not part:
+                        continue
+                    try:
+                        values.append(convert(part))
+                    except ValueError:
+                        continue
+            if is_dict:
+                obj[name] = values
+            else:
+                setattr(obj, name, values)
+            self.__call_var_traces(name)
+
+        return update
+
+    @staticmethod
+    def __format_list_value(value):
+        if not value:
+            return ""
+        return ", ".join(str(item) for item in value)
+
     def __create_vars(self, obj):
         new_vars = {}
 
@@ -206,6 +243,14 @@ class UIState:
                     var = tk.StringVar(master=self.master)
                     var.set("" if obj_var is None else str(obj_var))
                     var.trace_add("write", self.__set_float_var(obj, is_dict, name, var, obj.nullables[name]))
+                    new_vars[name] = var
+                elif var_type is list or get_origin(var_type) is list:
+                    element_type = None
+                    if get_origin(var_type) is list and len(get_args(var_type)) > 0:
+                        element_type = get_args(var_type)[0]
+                    var = tk.StringVar(master=self.master)
+                    var.set(self.__format_list_value(obj_var))
+                    var.trace_add("write", self.__set_list_var(obj, is_dict, name, var, element_type))
                     new_vars[name] = var
         else:
             iterable = obj.items() if is_dict else vars(obj).items()
@@ -277,6 +322,9 @@ class UIState:
                 elif isinstance(obj_var, int | float):
                     var = self.__vars[name]
                     var.set(str(obj_var))
+                elif isinstance(obj_var, list):
+                    var = self.__vars[name]
+                    var.set(self.__format_list_value(obj_var))
 
     # metadata api
     def _resolve_state_and_leaf(self, name: str):

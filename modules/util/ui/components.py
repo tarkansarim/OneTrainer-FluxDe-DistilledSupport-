@@ -466,6 +466,8 @@ def switch(
         var_name: str,
         command: Callable[[], None] = None,
         text: str = "",
+        tooltip: str = "",
+        wide_tooltip: bool = False,
 ):
     var = ui_state.get_var(var_name)
     if command:
@@ -473,6 +475,9 @@ def switch(
 
     component = ctk.CTkSwitch(master, variable=var, text=text, command=command)
     component.grid(row=row, column=column, padx=PAD, pady=(PAD, PAD), sticky="new")
+
+    if tooltip:
+        ToolTip(component, tooltip, wide=wide_tooltip)
 
     def create_destroy(component):
         orig_destroy = component.destroy
