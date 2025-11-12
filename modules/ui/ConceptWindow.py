@@ -38,7 +38,6 @@ from mgds.pipelineModuleTypes.RandomAccessPipelineModule import (
     RandomAccessPipelineModule,
 )
 from modules.dataLoader.pipelineModules.NormalizeLuma import NormalizeLuma
-from modules.dataLoader.pipelineModules.StyleFocus import StyleFocus
 
 import torch
 from torchvision.transforms import functional
@@ -280,16 +279,6 @@ class ConceptWindow(ctk.CTkToplevel):
         components.entry(frame, 10, 1, self.image_ui_state, "luma_target_mean")
         components.entry(frame, 10, 2, self.image_ui_state, "luma_target_std")
         components.entry(frame, 10, 3, self.image_ui_state, "luma_mix")
-
-        # style focus (structure suppression)
-        components.label(frame, 13, 0, "Style Focus",
-                         tooltip="Suppress high-frequency structure to emphasize shading/lighting/colors (low-pass)")
-        components.switch(frame, 13, 1, self.image_ui_state, "enable_style_focus")
-        components.options(frame, 13, 2, ["downup", "lowpass_luma", "color_only"], self.image_ui_state, "style_focus_mode")
-        components.entry(frame, 14, 1, self.image_ui_state, "style_focus_short_side")
-        components.entry(frame, 14, 2, self.image_ui_state, "style_focus_blur_sigma")
-        components.entry(frame, 14, 3, self.image_ui_state, "style_focus_mix")
-        components.entry(frame, 15, 1, self.image_ui_state, "style_focus_color_mean")
 
         # random circular mask shrink
         components.label(frame, 8, 0, "Circular Mask Generation",
@@ -964,13 +953,6 @@ class ConceptWindow(ctk.CTkToplevel):
                 'luma_target_mean': getattr(self.concept.image, "luma_target_mean", 0.5),
                 'luma_target_std': getattr(self.concept.image, "luma_target_std", 0.25),
                 'luma_mix': getattr(self.concept.image, "luma_mix", 1.0),
-                # style focus controls for preview
-                'enable_style_focus': getattr(self.concept.image, "enable_style_focus", False),
-                'style_focus_mode': getattr(self.concept.image, "style_focus_mode", "downup"),
-                'style_focus_short_side': getattr(self.concept.image, "style_focus_short_side", 128),
-                'style_focus_blur_sigma': getattr(self.concept.image, "style_focus_blur_sigma", 3.0),
-                'style_focus_mix': getattr(self.concept.image, "style_focus_mix", 0.7),
-                'style_focus_color_mean': getattr(self.concept.image, "style_focus_color_mean", 0.5),
                 # provide a minimal concept dict so NormalizeLuma can read concept.image.*
                 'concept': {
                     'image': {
@@ -978,12 +960,6 @@ class ConceptWindow(ctk.CTkToplevel):
                         'luma_target_mean': getattr(self.concept.image, "luma_target_mean", 0.5),
                         'luma_target_std': getattr(self.concept.image, "luma_target_std", 0.25),
                         'luma_mix': getattr(self.concept.image, "luma_mix", 1.0),
-                        'enable_style_focus': getattr(self.concept.image, "enable_style_focus", False),
-                        'style_focus_mode': getattr(self.concept.image, "style_focus_mode", "downup"),
-                        'style_focus_short_side': getattr(self.concept.image, "style_focus_short_side", 128),
-                        'style_focus_blur_sigma': getattr(self.concept.image, "style_focus_blur_sigma", 3.0),
-                        'style_focus_mix': getattr(self.concept.image, "style_focus_mix", 0.7),
-                        'style_focus_color_mean': getattr(self.concept.image, "style_focus_color_mean", 0.5),
                     }
                 },
 
@@ -1012,7 +988,6 @@ class ConceptWindow(ctk.CTkToplevel):
             random_saturation = RandomSaturation(names=['image'], enabled_in_name='enable_random_saturation', fixed_enabled_in_name='enable_fixed_saturation', max_strength_in_name='random_saturation_max_strength')
             random_hue = RandomHue(names=['image'], enabled_in_name='enable_random_hue', fixed_enabled_in_name='enable_fixed_hue', max_strength_in_name='random_hue_max_strength')
             normalize_luma = NormalizeLuma(image_in_name='image', image_out_name='image', mask_in_name='mask')
-            style_focus = StyleFocus(image_in_name='image', image_out_name='image', mask_in_name='mask')
             drop_tags = DropTags(text_in_name='prompt', enabled_in_name='tag_dropout_enable', probability_in_name='tag_dropout_probability', dropout_mode_in_name='tag_dropout_mode',
                                 special_tags_in_name='tag_dropout_special_tags', special_tag_mode_in_name='tag_dropout_special_tags_mode', delimiter_in_name='tag_delimiter',
                                 keep_tags_count_in_name='keep_tags_count', text_out_name='prompt', regex_enabled_in_name='tag_dropout_special_tags_regex')
@@ -1032,7 +1007,6 @@ class ConceptWindow(ctk.CTkToplevel):
                 random_saturation,
                 random_hue,
                 normalize_luma,
-                style_focus,
                 drop_tags,
                 caps_randomize,
                 shuffle_tags,
