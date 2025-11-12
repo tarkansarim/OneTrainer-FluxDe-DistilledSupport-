@@ -134,13 +134,13 @@ class ConceptImageConfig(BaseConfig):
         data.append(("luma_target_mean", 0.5, float, False))
         data.append(("luma_target_std", 0.25, float, False))
         data.append(("luma_mix", 1.0, float, False))
-		# Style focus (suppress structure, emphasize tone/color)
-		data.append(("enable_style_focus", False, bool, False))
-		data.append(("style_focus_mode", "downup", str, False))  # downup | lowpass_luma | color_only
-		data.append(("style_focus_short_side", 128, int, False))
-		data.append(("style_focus_blur_sigma", 3.0, float, False))
-		data.append(("style_focus_mix", 0.7, float, False))
-		data.append(("style_focus_color_mean", 0.5, float, False))
+        # Style focus (suppress structure, emphasize tone/color)
+        data.append(("enable_style_focus", False, bool, False))
+        data.append(("style_focus_mode", "downup", str, False))  # downup | lowpass_luma | color_only
+        data.append(("style_focus_short_side", 128, int, False))
+        data.append(("style_focus_blur_sigma", 3.0, float, False))
+        data.append(("style_focus_mix", 0.7, float, False))
+        data.append(("style_focus_color_mean", 0.5, float, False))
 
         return ConceptImageConfig(data)
 
