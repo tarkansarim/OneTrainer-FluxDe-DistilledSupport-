@@ -43,6 +43,7 @@ from mgds.pipelineModules.SelectRandomText import SelectRandomText
 from mgds.pipelineModules.ShuffleTags import ShuffleTags
 from mgds.pipelineModules.SingleAspectCalculation import SingleAspectCalculation
 from modules.dataLoader.pipelineModules.NormalizeLuma import NormalizeLuma
+from modules.dataLoader.pipelineModules.StyleFocus import StyleFocus
 
 import torch
 from torchvision.transforms import InterpolationMode
@@ -280,6 +281,8 @@ class DataLoaderText2ImageMixin:
         # Place after color jitter to remove global tone as a learnable cue.
         mask_name = 'mask' if (config.masked_training or config.model_type.has_mask_input()) else None
         modules.append(NormalizeLuma(image_in_name='image', image_out_name='image', mask_in_name=mask_name))
+        # Optional style focus (low-pass) to emphasize shading/colors over structure
+        modules.append(StyleFocus(image_in_name='image', image_out_name='image', mask_in_name=mask_name))
 
         # Debug: print the augmentation pipeline composition once per dataset creation
         if getattr(config, 'debug_mode', False):
