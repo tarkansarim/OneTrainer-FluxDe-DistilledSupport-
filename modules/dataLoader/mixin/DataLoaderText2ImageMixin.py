@@ -6,6 +6,8 @@ from modules.util import path_util
 from modules.util.config.TrainConfig import TrainConfig
 from modules.util.enum.DataType import DataType
 
+from modules.dataLoader.pipelineModules import CropCaptionGenerator, DetailCropGenerator
+
 from mgds.OutputPipelineModule import OutputPipelineModule
 from mgds.pipelineModules.AspectBatchSorting import AspectBatchSorting
 from mgds.pipelineModules.AspectBucketing import AspectBucketing
@@ -40,8 +42,10 @@ from mgds.pipelineModules.SelectInput import SelectInput
 from mgds.pipelineModules.SelectRandomText import SelectRandomText
 from mgds.pipelineModules.ShuffleTags import ShuffleTags
 from mgds.pipelineModules.SingleAspectCalculation import SingleAspectCalculation
+from modules.dataLoader.pipelineModules.NormalizeLuma import NormalizeLuma
 
 import torch
+from torchvision.transforms import InterpolationMode
 
 from diffusers import AutoencoderKL
 
@@ -145,6 +149,38 @@ class DataLoaderText2ImageMixin:
 
         return modules
 
+    def _detail_crop_modules(self, config: TrainConfig) -> list:
+        additional = {
+            'mask': InterpolationMode.NEAREST,
+            'custom_conditioning_image': InterpolationMode.BILINEAR,
+            'depth': InterpolationMode.BILINEAR,
+        }
+
+        detail_module = DetailCropGenerator(
+            image_name='image',
+            concept_name='concept',
+            image_path_name='image_path',
+            additional_image_like_names=additional,
+            export_root=config.debug_dir,
+            passthrough_names=[
+                'prompt',
+            ],
+        )
+
+        caption_module = CropCaptionGenerator(
+            image_name='image',
+            concept_name='concept',
+            prompt_name='prompt',
+            image_path_name='image_path',
+            additional_passthrough=[
+                'mask',
+                'custom_conditioning_image',
+                'depth',
+            ],
+        )
+
+        return [detail_module, caption_module]
+
     def _aspect_bucketing_in(self, config: TrainConfig, aspect_bucketing_quantization: int, frame_dim_enabled:bool=False):
         calc_aspect = CalcAspect(image_in_name='image', resolution_out_name='original_resolution')
 
@@ -239,6 +275,19 @@ class DataLoaderText2ImageMixin:
             caps_randomize,
             shuffle_tags,
         ]
+
+        # Apply per-sample luminance normalization (if enabled in concept.image)
+        # Place after color jitter to remove global tone as a learnable cue.
+        mask_name = 'mask' if (config.masked_training or config.model_type.has_mask_input()) else None
+        modules.append(NormalizeLuma(image_in_name='image', image_out_name='image', mask_in_name=mask_name))
+
+        # Debug: print the augmentation pipeline composition once per dataset creation
+        if getattr(config, 'debug_mode', False):
+            try:
+                module_names = [m.__class__.__name__ for m in modules]
+                print(f"[Augmentations] Pipeline modules: {', '.join(module_names)}")
+            except Exception as e:
+                print(f"[Augmentations] Warning: failed to list augmentation modules: {e}")
 
         return modules
 

@@ -6,6 +6,57 @@ from modules.util.enum.BalancingStrategy import BalancingStrategy
 from modules.util.enum.ConceptType import ConceptType
 
 
+class ConceptDetailCropsConfig(BaseConfig):
+    enabled: bool
+    tile_resolution: int
+    overlap: int
+    blank_std_threshold: float
+    blank_edge_threshold: int
+    include_context_tiles: bool
+    include_full_images: bool
+    scales: list[int]
+    save_to_disk: bool
+    save_directory: str
+    save_max_tiles_per_image: int
+    parallel_workers: int
+
+    def __init__(self, data: list[(str, Any, type, bool)]):
+        super().__init__(data)
+
+    @staticmethod
+    def default_values():
+        data = []
+
+        data.append(("enabled", False, bool, False))
+        data.append(("tile_resolution", 1024, int, False))
+        data.append(("overlap", 128, int, False))
+        data.append(("include_context_tiles", False, bool, False))
+        data.append(("include_full_images", True, bool, False))
+        data.append(("blank_std_threshold", 0.001, float, False))
+        data.append(("blank_edge_threshold", 0.015, float, False))
+        data.append(("parallel_workers", 0, int, False))
+        data.append(("regenerate_each_epoch", False, bool, False))
+        data.append(("enable_captioning", False, bool, False))
+        data.append(("caption_probability", 0.2, float, False))
+        data.append(("caption_model", "qwen2.5vl:3b", str, False))
+        data.append(("caption_system_prompt",
+                     "You are an image tagging assistant for training detail crops. Produce concise comma-separated descriptors of what is visible in the crop. Use the provided context caption when it helps disambiguate close-ups. Never invent objects that are not clearly present.",
+                     str, False))
+        data.append(("caption_user_prompt",
+                     "Context caption: \"{context}\"\nDescribe the visual content of this crop using comma-separated tags (max 30 words). Focus on objects, materials, textures, colors, lighting, and fine details. If the crop is too ambiguous, respond with \"unclear_crop\".",
+                     str, False))
+        data.append(("caption_endpoint", "http://localhost:11434", str, False))
+        data.append(("caption_timeout", 120.0, float, False))
+        data.append(("caption_max_retries", 4, int, False))
+        data.append(("caption_auto_pull", True, bool, False))
+        data.append(("scales", [], list[int], False))
+        data.append(("save_to_disk", False, bool, False))
+        data.append(("save_directory", "", str, False))
+        data.append(("save_max_tiles_per_image", 0, int, False))
+
+        return ConceptDetailCropsConfig(data)
+
+
 class ConceptImageConfig(BaseConfig):
     enable_crop_jitter: bool
 
@@ -77,6 +128,12 @@ class ConceptImageConfig(BaseConfig):
         data.append(("enable_random_circular_mask_shrink", False, bool, False))
 
         data.append(("enable_random_mask_rotate_crop", False, bool, False))
+        data.append(("detail_crops", ConceptDetailCropsConfig.default_values(), ConceptDetailCropsConfig, False))
+        # Luminance normalization (post-augmentation)
+        data.append(("enable_luma_normalize", False, bool, False))
+        data.append(("luma_target_mean", 0.5, float, False))
+        data.append(("luma_target_std", 0.25, float, False))
+        data.append(("luma_mix", 1.0, float, False))
 
         return ConceptImageConfig(data)
 

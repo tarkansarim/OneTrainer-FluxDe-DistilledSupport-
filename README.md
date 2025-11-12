@@ -26,6 +26,7 @@ OneTrainer is a one-stop solution for all your Diffusion training needs.
 -   **Dataset Tooling**: Automatically caption your dataset using BLIP, BLIP2 and WD-1.4, or create masks for masked training using ClipSeg or Rembg
 -   **Model Tooling**: Convert between different model formats from a simple UI
 -   **Sampling UI**: Sample the model during training without switching to a different application
+ -   **Luma Normalize (Tone Invariance)**: Optional per-sample luminance normalization to reduce learned brightness/contrast bias
 
 ![OneTrainerGUI.gif](resources/images/OneTrainerGUI.gif)
 
@@ -197,6 +198,26 @@ Training Flux Dev Dedistilled works exactly like regular Flux Dev:
 4. Train normally - everything else is automatic!
 
 Sample images during training will automatically use traditional CFG if your model is dedistilled.
+
+## Luma Normalize (Tone Invariance)
+
+Luma Normalize is an optional post-augmentation step that makes training inputs more invariant to global exposure and contrast. It runs after random color augs and centers each image’s luminance (brightness) and contrast to targets, reducing the model’s tendency to learn a “global look” instead of content.
+
+- Where: Concept window → Image augmentation tab
+- Toggle: `Luma Normalize`
+- Parameters:
+  - `luma_target_mean`: target brightness (0–1). Typical: `0.50` (neutral) or `0.55–0.65` to brighten.
+  - `luma_target_std`: target contrast (0–1). Typical: `0.20–0.30` (lower = flatter contrast).
+  - `luma_mix`: 0–1 blend with original. `1.0` = full normalize (strongest), `0.6–0.9` recommended to preserve some style/randomness.
+
+Recommended use
+- Enable when output images drift too bright/dark or overly punchy/flat despite augmentation.
+- Keep random brightness/contrast moderate (e.g., 0.05–0.15); luma normalize runs after and recenters tone.
+- Apply per concept: turn on for content-focused concepts; leave off for concepts where “look” is intentional.
+
+Notes
+- With `mix=1.0`, previews look less random (tone is pinned). Reduce `mix` to keep visible jitter.
+- This step does not change colors structurally; it equalizes per-sample luminance statistics.
 
 ## Additional Improvements in This Fork
 

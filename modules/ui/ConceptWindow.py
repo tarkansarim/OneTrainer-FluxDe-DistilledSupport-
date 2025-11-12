@@ -37,6 +37,7 @@ from mgds.pipelineModules.ShuffleTags import ShuffleTags
 from mgds.pipelineModuleTypes.RandomAccessPipelineModule import (
     RandomAccessPipelineModule,
 )
+from modules.dataLoader.pipelineModules.NormalizeLuma import NormalizeLuma
 
 import torch
 from torchvision.transforms import functional
@@ -104,6 +105,7 @@ class ConceptWindow(ctk.CTkToplevel):
 
         self.general_tab = self.__general_tab(tabview.add("general"), concept)
         self.image_augmentation_tab = self.__image_augmentation_tab(tabview.add("image augmentation"))
+        self.detail_crops_tab = self.__detail_crops_tab(tabview.add("detail crops"))
         self.text_augmentation_tab = self.__text_augmentation_tab(tabview.add("text augmentation"))
         self.concept_stats_tab = self.__concept_stats_tab(tabview.add("statistics"))
 
@@ -268,6 +270,16 @@ class ConceptWindow(ctk.CTkToplevel):
         components.switch(frame, 7, 2, self.image_ui_state, "enable_fixed_hue")
         components.entry(frame, 7, 3, self.image_ui_state, "random_hue_max_strength")
 
+        # luma normalization
+        components.label(frame, 9, 0, "Luma Normalize",
+                         tooltip="Normalize per-image luminance (brightness/contrast) after color jitter to enforce invariance")
+        components.switch(frame, 9, 1, self.image_ui_state, "enable_luma_normalize")
+        components.label(frame, 10, 0, "Luma Targets",
+                         tooltip="Target luminance mean/std and mix. Mix=1 fully normalize; lower to blend with original.")
+        components.entry(frame, 10, 1, self.image_ui_state, "luma_target_mean")
+        components.entry(frame, 10, 2, self.image_ui_state, "luma_target_std")
+        components.entry(frame, 10, 3, self.image_ui_state, "luma_mix")
+
         # random circular mask shrink
         components.label(frame, 8, 0, "Circular Mask Generation",
                          tooltip="Automatically create circular masks for masked training")
@@ -314,6 +326,263 @@ class ConceptWindow(ctk.CTkToplevel):
         self.caption_preview.insert(index="1.0", text=caption_preview)
         self.caption_preview.configure(state="disabled")
         self.caption_preview.grid(row=3, column=0, columnspan=3, rowspan=3)
+
+        frame.pack(fill="both", expand=1)
+        return frame
+
+    def __detail_crops_tab(self, master):
+        frame = ctk.CTkScrollableFrame(master, fg_color="transparent")
+        frame.grid_columnconfigure(0, weight=0, minsize=200)
+        frame.grid_columnconfigure(1, weight=1)
+
+        detail_state: UIState = self.image_ui_state.get_var("detail_crops")
+
+        components.label(
+            frame,
+            0,
+            0,
+            "Deterministic detail crops duplicate high-res images into tiled crops each epoch.",
+            wraplength=420,
+        )
+
+        components.label(
+            frame,
+            1,
+            0,
+            "Enabled",
+            tooltip="Turn on deterministic detail crop generation for this concept.",
+        )
+        enabled_switch = components.switch(frame, 1, 1, detail_state, "enabled")
+        enabled_switch.configure(width=40)
+
+        components.label(
+            frame,
+            2,
+            0,
+            "Tile Resolution",
+            tooltip="Target tile size (square) used when generating detail crops. Typically matches your training resolution.",
+        )
+        components.entry(frame, 2, 1, detail_state, "tile_resolution", width=120)
+
+        components.label(
+            frame,
+            3,
+            0,
+            "Overlap (px)",
+            tooltip="How many pixels to overlap between adjacent tiles. Higher values add more coverage at the cost of more crops.",
+        )
+        components.entry(frame, 3, 1, detail_state, "overlap", width=120)
+
+        components.label(
+            frame,
+            4,
+            0,
+            "Scales",
+            tooltip="Comma-separated upscale factors applied before tiling, e.g. \"2,4\" for 2x and 4x views.",
+            wraplength=220,
+        )
+        components.entry(frame, 4, 1, detail_state, "scales")
+
+        components.label(
+            frame,
+            5,
+            0,
+            "Include Context Tiles",
+            tooltip="Add a pass of context tiles at the base resolution in addition to the scaled detail tiles.",
+        )
+        components.switch(frame, 5, 1, detail_state, "include_context_tiles")
+
+        components.label(
+            frame,
+            6,
+            0,
+            "Include Full Images",
+            tooltip="Generate additional context tiles surrounding the detail crop",
+        )
+
+        components.switch(
+            frame,
+            6,
+            1,
+            detail_state,
+            "include_full_images",
+            text="Include full images",
+            tooltip="Include the original full-resolution image alongside detail crops",
+        )
+
+        components.label(
+            frame,
+            7,
+            0,
+            "Regenerate Each Epoch",
+            tooltip="If enabled, rebuild the tile layout at the start of every epoch. Disable to reuse the cached layout for faster repeats.",
+        )
+        components.switch(frame, 7, 1, detail_state, "regenerate_each_epoch")
+
+        components.label(
+            frame,
+            8,
+            0,
+            "Blank Std Threshold",
+            tooltip="Tiles with grayscale standard deviation below this value are considered blank and skipped.",
+        )
+        components.entry(frame, 8, 1, detail_state, "blank_std_threshold", width=120)
+
+        components.label(
+            frame,
+            9,
+            0,
+            "Blank Edge Threshold",
+            tooltip="Tiles with edge counts below this value are considered blank and skipped.",
+        )
+        components.entry(frame, 9, 1, detail_state, "blank_edge_threshold", width=120)
+
+        components.label(
+            frame,
+            10,
+            0,
+            "Enable Captioning",
+            tooltip="Generate on-the-fly captions for detail crops through a local Ollama endpoint.",
+        )
+        caption_switch = components.switch(frame, 10, 1, detail_state, "enable_captioning")
+        caption_switch.configure(width=40)
+
+        components.label(
+            frame,
+            11,
+            0,
+            "Caption Probability",
+            tooltip="Fraction (0-1) of detail crops that receive generated captions.",
+        )
+        caption_probability_entry = components.entry(frame, 11, 1, detail_state, "caption_probability", width=120)
+
+        components.label(
+            frame,
+            12,
+            0,
+            "Caption Model",
+            tooltip="Ollama model identifier to call for captioning.",
+        )
+        caption_model_entry = components.entry(frame, 12, 1, detail_state, "caption_model", width=220)
+
+        components.label(
+            frame,
+            13,
+            0,
+            "Caption Endpoint",
+            tooltip="Base URL of the Ollama server (e.g. http://localhost:11434).",
+        )
+        caption_endpoint_entry = components.entry(frame, 13, 1, detail_state, "caption_endpoint", width=220)
+
+        components.label(
+            frame,
+            14,
+            0,
+            "Caption Timeout (s)",
+            tooltip="HTTP timeout when waiting for caption responses.",
+        )
+        caption_timeout_entry = components.entry(frame, 14, 1, detail_state, "caption_timeout", width=120)
+
+        components.label(
+            frame,
+            15,
+            0,
+            "Caption Max Retries",
+            tooltip="Number of times to retry a failed caption request before aborting training.",
+        )
+        caption_retries_entry = components.entry(frame, 15, 1, detail_state, "caption_max_retries", width=120)
+
+        components.label(
+            frame,
+            16,
+            0,
+            "Caption System Prompt",
+            tooltip="System prompt template sent to the vision-language model.",
+        )
+        caption_system_entry = components.entry(frame, 16, 1, detail_state, "caption_system_prompt", width=360, sticky="new")
+
+        components.label(
+            frame,
+            17,
+            0,
+            "Caption User Prompt",
+            tooltip="User prompt template. `{context}` is replaced with the source caption.",
+        )
+        caption_user_entry = components.entry(frame, 17, 1, detail_state, "caption_user_prompt", width=360, sticky="new")
+
+        components.label(
+            frame,
+            18,
+            0,
+            "Auto-Pull Model",
+            tooltip="Automatically run 'ollama pull <model>' if the configured model is missing.",
+        )
+        caption_autopull_switch = components.switch(frame, 18, 1, detail_state, "caption_auto_pull")
+
+        components.label(
+            frame,
+            19,
+            0,
+            "Save Crops to Disk",
+            tooltip="Temporarily export generated tiles so you can inspect them on disk.",
+        )
+        save_switch = components.switch(frame, 19, 1, detail_state, "save_to_disk")
+        save_switch.configure(width=40)
+
+        components.label(
+            frame,
+            20,
+            0,
+            "Save Directory",
+            tooltip="Directory where exported detail crops will be written when saving is enabled.",
+        )
+        save_dir_frame = components.dir_entry(frame, 20, 1, detail_state, "save_directory")
+
+        components.label(
+            frame,
+            21,
+            0,
+            "Max Tiles Per Image",
+            tooltip="Limit how many tiles are exported per source image. Set 0 for no limit.",
+        )
+        save_limit_entry = components.entry(frame, 21, 1, detail_state, "save_max_tiles_per_image", width=120)
+
+        components.label(
+            frame,
+            22,
+            0,
+            "Parallel Workers",
+            tooltip="Maximum number of CPU workers used per image when generating tiles. Set 0 to pick automatically.",
+        )
+        components.entry(frame, 22, 1, detail_state, "parallel_workers", width=120)
+
+        def update_save_widgets(*_):
+            state = "normal" if detail_state.get_var("save_to_disk").get() else "disabled"
+            for child in save_dir_frame.winfo_children():
+                child.configure(state=state)
+            save_limit_entry.configure(state=state)
+
+        detail_state.get_var("save_to_disk").trace_add("write", lambda *_: update_save_widgets())
+        update_save_widgets()
+
+        caption_widgets = [
+            caption_probability_entry,
+            caption_model_entry,
+            caption_endpoint_entry,
+            caption_timeout_entry,
+            caption_retries_entry,
+            caption_system_entry,
+            caption_user_entry,
+            caption_autopull_switch,
+        ]
+
+        def update_caption_widgets(*_):
+            state = "normal" if detail_state.get_var("enable_captioning").get() else "disabled"
+            for widget in caption_widgets:
+                widget.configure(state=state)
+
+        detail_state.get_var("enable_captioning").trace_add("write", lambda *_: update_caption_widgets())
+        update_caption_widgets()
 
         frame.pack(fill="both", expand=1)
         return frame
@@ -659,6 +928,7 @@ class ConceptWindow(ctk.CTkToplevel):
                 'true': True,
                 'image': image_tensor,
                 'mask': mask_tensor,
+                # image augmentation toggles/strengths
                 'enable_random_flip': self.concept.image.enable_random_flip,
                 'enable_fixed_flip': self.concept.image.enable_fixed_flip,
                 'enable_random_rotate': self.concept.image.enable_random_rotate,
@@ -678,6 +948,20 @@ class ConceptWindow(ctk.CTkToplevel):
                 'random_hue_max_strength': self.concept.image.random_hue_max_strength,
                 'enable_random_circular_mask_shrink': self.concept.image.enable_random_circular_mask_shrink,
                 'enable_random_mask_rotate_crop': self.concept.image.enable_random_mask_rotate_crop,
+                # luma normalization controls for preview
+                'enable_luma_normalize': getattr(self.concept.image, "enable_luma_normalize", False),
+                'luma_target_mean': getattr(self.concept.image, "luma_target_mean", 0.5),
+                'luma_target_std': getattr(self.concept.image, "luma_target_std", 0.25),
+                'luma_mix': getattr(self.concept.image, "luma_mix", 1.0),
+                # provide a minimal concept dict so NormalizeLuma can read concept.image.*
+                'concept': {
+                    'image': {
+                        'enable_luma_normalize': getattr(self.concept.image, "enable_luma_normalize", False),
+                        'luma_target_mean': getattr(self.concept.image, "luma_target_mean", 0.5),
+                        'luma_target_std': getattr(self.concept.image, "luma_target_std", 0.25),
+                        'luma_mix': getattr(self.concept.image, "luma_mix", 1.0),
+                    }
+                },
 
                 'prompt' : prompt_output,
                 'tag_dropout_enable' : self.concept.text.tag_dropout_enable,
@@ -703,6 +987,7 @@ class ConceptWindow(ctk.CTkToplevel):
             random_contrast = RandomContrast(names=['image'], enabled_in_name='enable_random_contrast', fixed_enabled_in_name='enable_fixed_contrast', max_strength_in_name='random_contrast_max_strength')
             random_saturation = RandomSaturation(names=['image'], enabled_in_name='enable_random_saturation', fixed_enabled_in_name='enable_fixed_saturation', max_strength_in_name='random_saturation_max_strength')
             random_hue = RandomHue(names=['image'], enabled_in_name='enable_random_hue', fixed_enabled_in_name='enable_fixed_hue', max_strength_in_name='random_hue_max_strength')
+            normalize_luma = NormalizeLuma(image_in_name='image', image_out_name='image', mask_in_name='mask')
             drop_tags = DropTags(text_in_name='prompt', enabled_in_name='tag_dropout_enable', probability_in_name='tag_dropout_probability', dropout_mode_in_name='tag_dropout_mode',
                                 special_tags_in_name='tag_dropout_special_tags', special_tag_mode_in_name='tag_dropout_special_tags_mode', delimiter_in_name='tag_delimiter',
                                 keep_tags_count_in_name='keep_tags_count', text_out_name='prompt', regex_enabled_in_name='tag_dropout_special_tags_regex')
@@ -721,6 +1006,7 @@ class ConceptWindow(ctk.CTkToplevel):
                 random_contrast,
                 random_saturation,
                 random_hue,
+                normalize_luma,
                 drop_tags,
                 caps_randomize,
                 shuffle_tags,
