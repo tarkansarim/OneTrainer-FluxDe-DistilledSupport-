@@ -28,6 +28,15 @@ class StyleFocus(PipelineModule, RandomAccessPipelineModule):
     def length(self) -> int:
         return self._get_previous_length(self.image_in_name)
 
+    def get_inputs(self) -> list[str]:
+        names = [self.image_in_name, "concept"]
+        if self.mask_in_name:
+            names.append(self.mask_in_name)
+        return names
+
+    def get_outputs(self) -> list[str]:
+        return [self.image_out_name]
+
     @staticmethod
     def _luma(img: torch.Tensor) -> torch.Tensor:
         # img: (C,H,W) in [0,1], RGB
