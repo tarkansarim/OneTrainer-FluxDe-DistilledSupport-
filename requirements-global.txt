@@ -63,6 +63,7 @@ deepdiff==8.6.1 # output easy to read diff for troublshooting
 loguru==0.7.2
 peft>=0.17.0
 einops==0.8.0
-flash-attn==2.6.3; platform_system != "Windows"  # Optional fused attention kernels (skip on Windows where no wheels)
+# flash-attn temporarily disabled until SRPO integration is enabled/stable
+# flash-attn==2.6.3; platform_system != "Windows"  # Optional fused attention kernels (skip on Windows where no wheels)
 decord==0.6.0
 ollama==0.4.4
