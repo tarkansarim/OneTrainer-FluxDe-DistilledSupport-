@@ -367,8 +367,9 @@ function install_requirements_in_active_env {
     local platform_reqs
     platform_reqs="$(get_platform_requirements_path)"
     run_pip_in_active_env install --upgrade --upgrade-strategy eager -r "${platform_reqs}"
-    # Then install global requirements (may include flash-attn on Linux)
-    run_pip_in_active_env install --upgrade --upgrade-strategy eager -r requirements-global.txt
+    # Then install global requirements (may include flash-attn on Linux).
+    # Disable build isolation so packages that import torch during build (flash-attn) can see it.
+    run_pip_in_active_env install --no-build-isolation --upgrade --upgrade-strategy eager -r requirements-global.txt
     export OT_MUST_INSTALL_REQUIREMENTS="false"
 
     # Write update-check metadata to disk if user has requested "lazy updates",
