@@ -6,8 +6,8 @@
 FROM vastai/pytorch:cuda-12.8.1-auto
 
 WORKDIR /
-RUN git clone https://github.com/tarkansarim/OneTrainer-FluxDe-DistilledSupport- OneTrainer
-RUN cd OneTrainer \
+RUN git clone https://github.com/tarkansarim/OneTrainer-Plus OneTrainer-Plus
+RUN cd OneTrainer-Plus \
  && export OT_PLATFORM_REQUIREMENTS=requirements-cuda.txt \
  && export OT_LAZY_UPDATES=true \
  && export OT_PYTHON_CMD=/venv/main/bin/python \
@@ -27,4 +27,4 @@ RUN apt-get update --yes \
 RUN pip install nvitop \
  && pip cache purge \
  && rm -rf ~/.cache/pip
-RUN ln -snf /OneTrainer /workspace/OneTrainer
+RUN ln -snf /OneTrainer-Plus /workspace/OneTrainer-Plus && ln -snf /OneTrainer-Plus /workspace/OneTrainer

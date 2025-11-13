@@ -131,13 +131,13 @@ class LinuxCloud(BaseCloud):
         parent=Path(config.onetrainer_dir).parent.as_posix()
         
         # Always target our fork; ignore any saved install_cmd repo to avoid pulling the original
-        default_repo_path = f"{parent}/OneTrainer"
+        default_repo_path = f"{parent}/OneTrainer-Plus"
         
         # Clone or update the repo if directory doesn't exist
         self.connection.run(f'test -e {shlex.quote(config.onetrainer_dir)} \
                               || (mkdir -p {shlex.quote(parent)} \
                                   && cd {shlex.quote(parent)} \
-                                  && git clone https://github.com/tarkansarim/OneTrainer-Plus OneTrainer)',in_stream=False)
+                                  && git clone https://github.com/tarkansarim/OneTrainer-Plus OneTrainer-Plus)',in_stream=False)
         
         # Find the actual directory that was created (could be repo name or install_cmd target)
         # NEVER rename or move directories - use whatever git creates

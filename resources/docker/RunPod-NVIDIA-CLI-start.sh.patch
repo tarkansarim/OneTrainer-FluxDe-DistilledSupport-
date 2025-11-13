@@ -1,7 +1,11 @@
 83a84,88
 > link_onetrainer() {
->     if [[ ! -f /workspace/OneTrainer ]]; then
->         ln -snf /OneTrainer /workspace/OneTrainer
+>     # Ensure workspace links exist for both new and legacy paths
+>     if [[ ! -e /workspace/OneTrainer-Plus ]]; then
+>         ln -snf /OneTrainer-Plus /workspace/OneTrainer-Plus
+>     fi
+>     if [[ ! -e /workspace/OneTrainer ]]; then
+>         ln -snf /OneTrainer-Plus /workspace/OneTrainer
 >     fi
 > }
 93a100
