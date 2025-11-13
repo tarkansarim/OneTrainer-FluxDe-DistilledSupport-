@@ -130,16 +130,14 @@ class LinuxCloud(BaseCloud):
         config=self.config.cloud
         parent=Path(config.onetrainer_dir).parent.as_posix()
         
-        # Extract repo name from install_cmd to find actual directory after clone
-        url_match = re.search(r'github\.com/[^/]+/([^/\s]+)', config.install_cmd)
-        repo_name = url_match.group(1).rstrip('.git') if url_match else None
-        default_repo_path = f"{parent}/{repo_name}" if repo_name else None
+        # Always target our fork; ignore any saved install_cmd repo to avoid pulling the original
+        default_repo_path = f"{parent}/OneTrainer"
         
         # Clone or update the repo if directory doesn't exist
         self.connection.run(f'test -e {shlex.quote(config.onetrainer_dir)} \
                               || (mkdir -p {shlex.quote(parent)} \
                                   && cd {shlex.quote(parent)} \
-                                  && {config.install_cmd})',in_stream=False)
+                                  && git clone https://github.com/tarkansarim/OneTrainer-Plus OneTrainer)',in_stream=False)
         
         # Find the actual directory that was created (could be repo name or install_cmd target)
         # NEVER rename or move directories - use whatever git creates
@@ -166,14 +164,8 @@ class LinuxCloud(BaseCloud):
         print(f"Using repository directory: {actual_repo_dir}")
         
         # CRITICAL: Always verify and fix git remote
-        install_cmd = config.install_cmd
-        url_match = re.search(r'https://github\.com/[^\s/]+/[^\s/]+', install_cmd)
-        if url_match:
-            expected_repo_url = url_match.group(0)
-            if not expected_repo_url.endswith('.git'):
-                expected_repo_url += '.git'
-        else:
-            expected_repo_url = "https://github.com/tarkansarim/OneTrainer-FluxDe-DistilledSupport-.git"
+        # Force expected repo to our fork, regardless of any saved install command
+        expected_repo_url = "https://github.com/tarkansarim/OneTrainer-Plus.git"
         
         cmd_env_check = f"export PATH=$PATH:/usr/local/cuda/bin:/venv/main/bin && cd {shlex.quote(actual_repo_dir)}"
         verify_remote_cmd = f"{cmd_env_check} && (git remote get-url origin 2>/dev/null || echo '')"
@@ -205,16 +197,8 @@ class LinuxCloud(BaseCloud):
 
         if result.exited == 0:
             if update:
-                # CRITICAL: Ensure we're pulling from the correct fork, not the original repo
-                # Extract the expected repo URL from install_cmd (should be the fork URL)
-                install_cmd = config.install_cmd
-                url_match = re.search(r'https://github\.com/[^\s/]+/[^\s/]+', install_cmd)
-                if url_match:
-                    expected_repo_url = url_match.group(0)
-                    if not expected_repo_url.endswith('.git'):
-                        expected_repo_url += '.git'
-                else:
-                    expected_repo_url = "https://github.com/tarkansarim/OneTrainer-FluxDe-DistilledSupport-.git"
+                # Always enforce our fork URL on updates
+                expected_repo_url = "https://github.com/tarkansarim/OneTrainer-Plus.git"
                 
                 # Check current origin remote URL
                 verify_remote_cmd = f"{base_cmd_env} && (git remote get-url origin 2>/dev/null || echo '')"
