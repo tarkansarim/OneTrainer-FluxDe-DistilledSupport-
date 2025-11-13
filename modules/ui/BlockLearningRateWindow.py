@@ -179,6 +179,16 @@ class BlockLearningRateWindow(ctk.CTkToplevel):
             "Structure": self._make_single_block_preset(self._STRUCTURE_SINGLE_BLOCKS),
             "Detail": self._make_single_block_preset(self._DETAIL_SINGLE_BLOCKS),
         }
+        # Flux Luma Normalize preset: zero-out specified blocks to avoid contrast-shifted training
+        luma_zero: dict[str, float] = {}
+        for idx in [0, 1, 2, 3, 4, 5, 6]:
+            if 0 <= idx < self.num_double_blocks:
+                luma_zero[f"double_block_{idx}"] = 0.0
+        for idx in [15, 16, 22, 29, 32, 34, 35, 36, 37]:
+            if 0 <= idx < self.num_single_blocks:
+                luma_zero[f"single_block_{idx}"] = 0.0
+        if luma_zero:
+            presets["Luma Normalize"] = luma_zero
         return presets
 
     def _get_preset_names(self) -> list[str]:

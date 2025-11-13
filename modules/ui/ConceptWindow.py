@@ -48,6 +48,7 @@ from customtkinter import AppearanceModeTracker, ThemeManager
 from matplotlib import pyplot as plt
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from PIL import Image
+import tkinter.messagebox as messagebox
 
 
 class InputPipelineModule(
@@ -274,7 +275,7 @@ class ConceptWindow(ctk.CTkToplevel):
         # luma normalization
         components.label(frame, 9, 0, "Luma Normalize",
                          tooltip="Normalize per-image luminance (brightness/contrast) after color jitter to enforce invariance")
-        components.switch(frame, 9, 1, self.image_ui_state, "enable_luma_normalize")
+        components.switch(frame, 9, 1, self.image_ui_state, "enable_luma_normalize", command=self.__on_luma_normalize_toggle)
         components.label(frame, 10, 0, "Luma Mean",
                          tooltip="Target luminance mean (0–1). Lower to darken; higher to brighten.")
         components.entry(frame, 10, 1, self.image_ui_state, "luma_target_mean", width=140, sticky="nw")
@@ -334,6 +335,21 @@ class ConceptWindow(ctk.CTkToplevel):
 
         frame.pack(fill="both", expand=1)
         return frame
+
+    def __on_luma_normalize_toggle(self):
+        try:
+            enabled = bool(self.image_ui_state.get_var("enable_luma_normalize").get())
+        except Exception:
+            enabled = False
+        if enabled and hasattr(self.train_config, "model_type") and self.train_config.model_type.is_flux():
+            messagebox.showwarning(
+                "Flux + Luma Normalize",
+                "Recommended for Flux when Luma Normalize is enabled:\n\n"
+                "1) In Training tab, set 'Layer Filter' preset to 'Blocks'.\n"
+                "2) Click the three-dotted button next to it.\n"
+                "3) In the presets, select 'Luma Normalize'.\n\n"
+                "This preset zeros Double Blocks 0–6 and Single Blocks 15,16,22,29,32,34,35,36,37 to avoid contrast-shifted blocks."
+            )
 
     def __detail_crops_tab(self, master):
         frame = ctk.CTkScrollableFrame(master, fg_color="transparent")
