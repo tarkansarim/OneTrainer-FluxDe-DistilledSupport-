@@ -334,7 +334,9 @@ class DataLoaderText2ImageMixin:
         )
 
         world_size = multi.world_size() if config.multi_gpu else 1  #world_size can be 1 for validation dataloader, even if multi.world_size() returns > 1
-        if config.latent_caching:
+        # Use random-access versions whenever we have multiple ranks to avoid index sync issues
+        use_inline = (not config.latent_caching) and (world_size == 1)
+        if not use_inline:
             batch_sorting = AspectBatchSorting(resolution_in_name='crop_resolution', names=sort_names, batch_size=config.batch_size * world_size)
             distributed_sampler = DistributedSampler(names=sort_names, world_size=world_size, rank=multi.rank())
         else:

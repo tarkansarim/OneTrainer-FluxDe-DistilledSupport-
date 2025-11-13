@@ -510,6 +510,12 @@ def create_optimizer(
             raise RuntimeError('layer offloading can only be used for fine tuning when using an optimizer that supports "fused_back_pass"')
 
     parameters = parameter_group_collection.parameters_for_optimizer(config)
+    # Guard against empty parameter groups (can happen with certain layer filters / selections)
+    if not parameters or all((isinstance(g, dict) and (not g.get('params'))) for g in parameters):
+        raise RuntimeError(
+            "No trainable parameters were selected for the optimizer. "
+            "Please check your layer filters, selected layers, and training flags."
+        )
 
     match config.optimizer.optimizer:
 

@@ -36,6 +36,9 @@ class NamedParameterGroupCollection:
         parameters = []
 
         for group in self.__groups:
+            # Skip groups without any parameters
+            if not group.parameters:
+                continue
             # Determine the learning rate
             lr = group.learning_rate if group.learning_rate is not None else config.learning_rate
             lr = lr * ((config.learning_rate_scaler.get_scale(config.batch_size, config.gradient_accumulation_steps)) ** 0.5)
@@ -51,8 +54,10 @@ class NamedParameterGroupCollection:
 
     @cached_property
     def unique_name_mapping(self) -> list[str]:
-        return [group.unique_name for group in self.__groups]
+        # Only include groups that actually have parameters (keeps mapping aligned with optimizer groups)
+        return [group.unique_name for group in self.__groups if group.parameters]
 
     @cached_property
     def display_name_mapping(self) -> list[str]:
-        return [group.display_name for group in self.__groups]
+        # Only include groups that actually have parameters (keeps mapping aligned with optimizer groups)
+        return [group.display_name for group in self.__groups if group.parameters]

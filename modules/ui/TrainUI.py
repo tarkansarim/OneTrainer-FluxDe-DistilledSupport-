@@ -1044,6 +1044,19 @@ class TrainUI(ctk.CTk):
 
         os.makedirs(Path(tensorboard_log_dir).absolute(), exist_ok=True)
 
+        # If TensorBoard is already running on the port, don't start a new one.
+        def _tb_is_listening() -> bool:
+            try:
+                import urllib.request
+                with urllib.request.urlopen(f"http://localhost:{self.train_config.tensorboard_port}/", timeout=1) as resp:
+                    return 200 <= getattr(resp, "status", 200) < 500
+            except Exception:
+                return False
+
+        if _tb_is_listening():
+            self.always_on_tensorboard_subprocess = None
+            return
+
         tensorboard_args = [
             tensorboard_executable,
             "--logdir",
@@ -1059,7 +1072,11 @@ class TrainUI(ctk.CTk):
         try:
             self.always_on_tensorboard_subprocess = subprocess.Popen(tensorboard_args)
         except Exception:
-            self.always_on_tensorboard_subprocess = None
+            # If starting failed but TB appears to be running, treat as connected.
+            if _tb_is_listening():
+                self.always_on_tensorboard_subprocess = None
+            else:
+                self.always_on_tensorboard_subprocess = None
 
     def _stop_always_on_tensorboard(self):
         if self.always_on_tensorboard_subprocess:

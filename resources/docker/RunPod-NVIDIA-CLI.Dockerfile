@@ -9,7 +9,7 @@ FROM runpod/pytorch:2.8.0-py3.11-cuda12.8.1-cudnn-devel-ubuntu22.04
 #in the image cache of a pod, and no download is necessary
 
 WORKDIR /
-RUN git clone https://github.com/tarkansarim/OneTrainer-FluxDe-DistilledSupport- OneTrainer
+RUN git clone https://github.com/tarkansarim/OneTrainer-Plus OneTrainer
 RUN cd OneTrainer \
  && export OT_PLATFORM_REQUIREMENTS=requirements-cuda.txt \
  && export OT_LAZY_UPDATES=true \
@@ -23,11 +23,15 @@ RUN apt-get update --yes \
 	  gh \
 	  iputils-ping \
 	  nano \
+      curl \
+      procps \
  && apt-get autoremove -y \
  && apt-get clean \
  && rm -rf /var/lib/apt/lists/*
 RUN pip install nvitop \
  && pip cache purge \
  && rm -rf ~/.cache/pip
+# Install Ollama CLI (ephemeral use inside the pod; no persistence/volumes)
+RUN curl -fsSL https://ollama.com/install.sh | sh
 COPY RunPod-NVIDIA-CLI-start.sh.patch /start.sh.patch
 RUN patch /start.sh < /start.sh.patch

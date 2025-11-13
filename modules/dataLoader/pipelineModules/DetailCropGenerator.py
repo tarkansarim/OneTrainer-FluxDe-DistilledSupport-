@@ -293,6 +293,12 @@ class DetailCropGenerator(PipelineModule, RandomAccessPipelineModule):
                 )
 
     def get_item(self, variation: int, index: int, requested_name: str = None) -> dict:
+        # Guard against rare out-of-range requests from upstream batchers
+        total = len(self._entries)
+        if total == 0:
+            raise IndexError("DetailCropGenerator has no entries available for this variation.")
+        if index < 0 or index >= total:
+            index = index % total
         entry = self._entries[index]
         concept = self._get_previous_item(variation, self.concept_name, entry.base_index)
         detail_cfg = self._extract_detail_config(concept)

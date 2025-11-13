@@ -94,7 +94,7 @@ class ConceptWindow(ctk.CTkToplevel):
         self.preview_augmentations = ctk.BooleanVar(self, True)
 
         self.title("Concept")
-        self.geometry("800x700")
+        self.geometry("1200x820")
         self.resizable(True, True)
 
         self.grid_rowconfigure(0, weight=1)
@@ -216,7 +216,8 @@ class ConceptWindow(ctk.CTkToplevel):
         frame.grid_columnconfigure(0, weight=0)
         frame.grid_columnconfigure(1, weight=0)
         frame.grid_columnconfigure(2, weight=0)
-        frame.grid_columnconfigure(3, weight=1)
+        frame.grid_columnconfigure(3, weight=0, minsize=220)  # fixed value column (no stretch)
+        frame.grid_columnconfigure(4, weight=0, minsize=340)  # preview column fixed width
 
         # header
         components.label(frame, 0, 1, "Random",
@@ -240,61 +241,65 @@ class ConceptWindow(ctk.CTkToplevel):
                          tooltip="Randomly rotates the sample during training")
         components.switch(frame, 3, 1, self.image_ui_state, "enable_random_rotate")
         components.switch(frame, 3, 2, self.image_ui_state, "enable_fixed_rotate")
-        components.entry(frame, 3, 3, self.image_ui_state, "random_rotate_max_angle")
+        components.entry(frame, 3, 3, self.image_ui_state, "random_rotate_max_angle", width=120, sticky="nw")
 
         # random brightness
         components.label(frame, 4, 0, "Random Brightness",
                          tooltip="Randomly adjusts the brightness of the sample during training")
         components.switch(frame, 4, 1, self.image_ui_state, "enable_random_brightness")
         components.switch(frame, 4, 2, self.image_ui_state, "enable_fixed_brightness")
-        components.entry(frame, 4, 3, self.image_ui_state, "random_brightness_max_strength")
+        components.entry(frame, 4, 3, self.image_ui_state, "random_brightness_max_strength", width=120, sticky="nw")
 
         # random contrast
         components.label(frame, 5, 0, "Random Contrast",
                          tooltip="Randomly adjusts the contrast of the sample during training")
         components.switch(frame, 5, 1, self.image_ui_state, "enable_random_contrast")
         components.switch(frame, 5, 2, self.image_ui_state, "enable_fixed_contrast")
-        components.entry(frame, 5, 3, self.image_ui_state, "random_contrast_max_strength")
+        components.entry(frame, 5, 3, self.image_ui_state, "random_contrast_max_strength", width=120, sticky="nw")
 
         # random saturation
         components.label(frame, 6, 0, "Random Saturation",
                          tooltip="Randomly adjusts the saturation of the sample during training")
         components.switch(frame, 6, 1, self.image_ui_state, "enable_random_saturation")
         components.switch(frame, 6, 2, self.image_ui_state, "enable_fixed_saturation")
-        components.entry(frame, 6, 3, self.image_ui_state, "random_saturation_max_strength")
+        components.entry(frame, 6, 3, self.image_ui_state, "random_saturation_max_strength", width=120, sticky="nw")
 
         # random hue
         components.label(frame, 7, 0, "Random Hue",
                          tooltip="Randomly adjusts the hue of the sample during training")
         components.switch(frame, 7, 1, self.image_ui_state, "enable_random_hue")
         components.switch(frame, 7, 2, self.image_ui_state, "enable_fixed_hue")
-        components.entry(frame, 7, 3, self.image_ui_state, "random_hue_max_strength")
+        components.entry(frame, 7, 3, self.image_ui_state, "random_hue_max_strength", width=120, sticky="nw")
 
         # luma normalization
         components.label(frame, 9, 0, "Luma Normalize",
                          tooltip="Normalize per-image luminance (brightness/contrast) after color jitter to enforce invariance")
         components.switch(frame, 9, 1, self.image_ui_state, "enable_luma_normalize")
-        components.label(frame, 10, 0, "Luma Targets",
-                         tooltip="Target luminance mean/std and mix. Mix=1 fully normalize; lower to blend with original.")
-        components.entry(frame, 10, 1, self.image_ui_state, "luma_target_mean")
-        components.entry(frame, 10, 2, self.image_ui_state, "luma_target_std")
-        components.entry(frame, 10, 3, self.image_ui_state, "luma_mix")
+        components.label(frame, 10, 0, "Luma Mean",
+                         tooltip="Target luminance mean (0–1). Lower to darken; higher to brighten.")
+        components.entry(frame, 10, 1, self.image_ui_state, "luma_target_mean", width=140, sticky="nw")
+        components.label(frame, 11, 0, "Luma Std",
+                         tooltip="Target luminance standard deviation (contrast). Lower = flatter contrast.")
+        components.entry(frame, 11, 1, self.image_ui_state, "luma_target_std", width=140, sticky="nw")
+        components.label(frame, 12, 0, "Luma Mix",
+                         tooltip="Blend toward targets. 1.0 = full normalize; lower to preserve some original tone.")
+        components.entry(frame, 12, 1, self.image_ui_state, "luma_mix", width=140, sticky="nw")
 
         # random circular mask shrink
-        components.label(frame, 8, 0, "Circular Mask Generation",
+        components.label(frame, 13, 0, "Circular Mask Generation",
                          tooltip="Automatically create circular masks for masked training")
-        components.switch(frame, 8, 1, self.image_ui_state, "enable_random_circular_mask_shrink")
+        components.switch(frame, 13, 1, self.image_ui_state, "enable_random_circular_mask_shrink")
 
         # random rotate and crop
-        components.label(frame, 11, 0, "Random Rotate and Crop",
+        components.label(frame, 14, 0, "Random Rotate and Crop",
                          tooltip="Randomly rotate the training samples and crop to the masked region")
-        components.switch(frame, 11, 1, self.image_ui_state, "enable_random_mask_rotate_crop")
+        components.switch(frame, 14, 1, self.image_ui_state, "enable_random_mask_rotate_crop")
 
         # circular mask generation
-        components.label(frame, 12, 0, "Resolution Override",
+        components.label(frame, 15, 0, "Resolution Override",
                          tooltip="Override the resolution for this concept. Optionally specify multiple resolutions separated by a comma, or a single exact resolution in the format <width>x<height>")
-        components.switch(frame, 12, 2, self.image_ui_state, "enable_resolution_override")
-        components.entry(frame, 12, 3, self.image_ui_state, "resolution_override")
+        components.switch(frame, 15, 1, self.image_ui_state, "enable_resolution_override")
+        components.entry(frame, 16, 1, self.image_ui_state, "resolution_override")
 
         # image
         image_preview, filename_preview, caption_preview = self.__get_preview_image()

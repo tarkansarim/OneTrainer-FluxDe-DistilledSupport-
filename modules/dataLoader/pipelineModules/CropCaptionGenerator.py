@@ -100,7 +100,16 @@ class CropCaptionGenerator(PipelineModule, RandomAccessPipelineModule):
         self._reset_progress(f"[Detail Captions] Epoch {variation}", self.length())
         self._has_shutdown_ollama = False
         super().clear_item_cache()
-        
+
+        # Determine distributed context
+        try:
+            from modules.util import multi_gpu_util as _multi  # type: ignore
+            world_size = int(getattr(_multi, "world_size")())
+            rank = int(getattr(_multi, "rank")())
+        except Exception:
+            world_size, rank = 1, 0
+        is_master = (rank == 0)
+
         # Pre-generate all captions upfront for better UX and progress tracking
         try:
             total = self.length()
@@ -108,10 +117,16 @@ class CropCaptionGenerator(PipelineModule, RandomAccessPipelineModule):
                 concept0 = self._get_previous_item(variation, self.concept_name, 0)
                 detail_cfg = DetailCropGenerator._extract_detail_config(concept0)
                 if detail_cfg.get('enable_captioning', False) and detail_cfg.get('caption_probability', 0.0) > 0.0:
+                    # In multi-GPU runs, perform pre-generation once on master.
+                    # Other ranks will read from the shared cache folder to avoid duplicated work.
+                    if world_size > 1 and not is_master:
+                        self._pregeneration_complete = True
+                        return
+
                     prob_pct = int(detail_cfg.get('caption_probability', 0.0) * 100)
                     print(f"[Detail Captions] Generating captions for epoch {variation} (~{prob_pct}% of {total} crops)...")
                     sys.stdout.flush()
-                    
+
                     with suppress(Exception):
                         ollama_manager.ensure_running()
                     # Ensure model exists locally (may take time on first run)
@@ -121,7 +136,7 @@ class CropCaptionGenerator(PipelineModule, RandomAccessPipelineModule):
                             detail_cfg.get('caption_endpoint') or "http://localhost:11434",
                             float(detail_cfg.get('caption_timeout', 120.0) or 120.0),
                         )
-                    
+
                     # Pre-generate captions for all items
                     caption_out_name = f"{self.prompt_name}_caption" if hasattr(self, 'prompt_name') else "prompt_caption"
                     for index in range(total):
@@ -131,7 +146,7 @@ class CropCaptionGenerator(PipelineModule, RandomAccessPipelineModule):
                         except Exception as e:
                             print(f"[Detail Captions] Error pre-generating caption for item {index}: {e}")
                             sys.stdout.flush()
-                    
+
                     print(f"[Detail Captions] Pre-generation complete. Metrics: {self._metrics}")
                     sys.stdout.flush()
                     self._pregeneration_complete = True
@@ -314,7 +329,7 @@ class CropCaptionGenerator(PipelineModule, RandomAccessPipelineModule):
     ) -> None:
         caption_path = self._caption_file_path(variation, data, detail_cfg, create_dirs=True)
         if not caption_path:
-            print(f"[Detail Captions Debug] _write_caption_file: caption_path is None, save_to_disk={detail_cfg.get('save_to_disk')}, save_directory={detail_cfg.get('save_directory')}")
+            # Saving to disk is disabled or no valid directory was resolved; rely on in-memory cache only.
             return
 
         try:
@@ -583,15 +598,27 @@ class CropCaptionGenerator(PipelineModule, RandomAccessPipelineModule):
             *,
             create_dirs: bool,
     ) -> Optional[str]:
-        if not detail_cfg.get('save_to_disk'):
+        # Use disk when:
+        # - user explicitly enabled save_to_disk, or
+        # - multi-GPU training is active (to share captions across ranks).
+        use_disk = bool(detail_cfg.get('save_to_disk'))
+        try:
+            from modules.util import multi_gpu_util as _multi  # type: ignore
+            if int(getattr(_multi, "world_size")()) > 1:
+                use_disk = True
+        except Exception:
+            pass
+
+        if not use_disk:
             return None
+
         base_dir = detail_cfg.get('save_directory')
         if not base_dir:
-            key = detail_cfg.get('save_directory', '__empty__') or '__empty__'
-            if key not in self._warned_missing_save_dir:
-                print("[Detail Captions] Warning: save_to_disk enabled but no save_directory configured; captions will not persist to disk.")
-                self._warned_missing_save_dir.add(key)
-            return None
+            # Fallback to OneTrainer cache directory by default
+            # TrainConfig default cache_dir is "workspace-cache/run"
+            base_dir = os.path.join(os.getcwd(), "workspace-cache", "run")
+        # Place captions under a stable sub-directory inside cache
+        base_dir = os.path.join(base_dir, "detail_captions")
 
         if not detail_cfg.get('regenerate_each_epoch', False):
             variation = 0

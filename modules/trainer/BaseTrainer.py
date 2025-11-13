@@ -96,6 +96,18 @@ class BaseTrainer(
         tensorboard_executable = os.path.join(os.path.dirname(sys.executable), "tensorboard")
         tensorboard_log_dir = os.path.join(self.config.workspace_dir, "tensorboard")
 
+        # If TensorBoard is already running on the desired port, don't start a new one.
+        def _tb_is_listening() -> bool:
+            try:
+                import urllib.request
+                with urllib.request.urlopen(f"http://localhost:{self.config.tensorboard_port}/", timeout=1) as resp:
+                    return 200 <= getattr(resp, "status", 200) < 500
+            except Exception:
+                return False
+
+        if _tb_is_listening():
+            return
+
         tensorboard_args = [
             tensorboard_executable,
             "--logdir",
@@ -108,7 +120,14 @@ class BaseTrainer(
         if self.config.tensorboard_expose:
             tensorboard_args.append("--bind_all")
 
-        self.tensorboard_subprocess = subprocess.Popen(tensorboard_args)
+        try:
+            self.tensorboard_subprocess = subprocess.Popen(tensorboard_args)
+        except Exception:
+            # If starting failed but TB appears to be running, treat as connected.
+            if _tb_is_listening():
+                self.tensorboard_subprocess = None
+                return
+            raise
 
     def _stop_tensorboard(self):
         self.tensorboard_subprocess.kill()

@@ -109,7 +109,11 @@ class FluxLoRASetup(
                     f"base_lr={base_lr:.8g}, multiplier={multiplier:.6g}, "
                     f"final_lr={block_lr:.8g}, params={param_count}"
                 )
-            
+            # Skip creating an optimizer group if this block has no parameters selected
+            if not params:
+                if config.debug_mode:
+                    print(f"[BlockLR][LoRA] Skipping transformer_{block_name}: empty parameter set")
+                continue
             parameter_group_collection.add_group(NamedParameterGroup(
                 unique_name=f"transformer_{block_name}",
                 parameters=params,
