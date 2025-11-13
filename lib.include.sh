@@ -362,7 +362,13 @@ function install_requirements_in_active_env {
     # be upgraded to the same versions as a fresh reinstall of requirements.txt.
     print "Installing requirements in active environment..."
     run_pip_in_active_env install --upgrade --upgrade-strategy eager pip setuptools
-    run_pip_in_active_env install --upgrade --upgrade-strategy eager -r requirements-global.txt -r "$(get_platform_requirements_path)"
+    # Install platform-specific requirements (e.g. PyTorch) first so optional native packages
+    # that depend on torch during build (like flash-attn) see it available.
+    local platform_reqs
+    platform_reqs="$(get_platform_requirements_path)"
+    run_pip_in_active_env install --upgrade --upgrade-strategy eager -r "${platform_reqs}"
+    # Then install global requirements (may include flash-attn on Linux)
+    run_pip_in_active_env install --upgrade --upgrade-strategy eager -r requirements-global.txt
     export OT_MUST_INSTALL_REQUIREMENTS="false"
 
     # Write update-check metadata to disk if user has requested "lazy updates",
