@@ -1,4 +1,5 @@
 import json
+import os
 from abc import ABCMeta
 
 from modules.util.config.ConceptConfig import ConceptConfig
@@ -23,9 +24,14 @@ class DataLoaderMgdsMixin(metaclass=ABCMeta):
     ):
         concepts = config.concepts
         if concepts is None:
-            with open(config.concept_file_name, 'r') as f:
+            concept_path = (getattr(config, "concept_file_name", "") or "").strip()
+            if not concept_path:
+                raise RuntimeError("Concepts are not configured: 'concept_file_name' is empty. Set a concepts file in the Concepts tab or embed concepts in the config.")
+            if not os.path.isfile(concept_path):
+                raise FileNotFoundError(f"Concept file not found: {concept_path}")
+            with open(concept_path, 'r') as f:
                 raw_concepts = json.load(f)
-                print(f"[DataLoader] Loading concepts from file: {config.concept_file_name}, found {len(raw_concepts)} raw concepts")
+                print(f"[DataLoader] Loading concepts from file: {concept_path}, found {len(raw_concepts)} raw concepts")
                 concepts = [ConceptConfig.default_values().from_dict(c) for c in raw_concepts]
         else:
             print(f"[DataLoader] Using concepts from config: {len(concepts)} concepts")

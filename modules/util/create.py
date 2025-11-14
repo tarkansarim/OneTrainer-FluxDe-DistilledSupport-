@@ -118,6 +118,7 @@ from modules.modelSetup.SanaEmbeddingSetup import SanaEmbeddingSetup
 from modules.modelSetup.SanaFineTuneSetup import SanaFineTuneSetup
 from modules.modelSetup.SanaLoRASetup import SanaLoRASetup
 from modules.modelSetup.StableDiffusion3EmbeddingSetup import StableDiffusion3EmbeddingSetup
+from modules.util.config.TrainConfig import TrainConfig
 from modules.modelSetup.StableDiffusion3FineTuneSetup import StableDiffusion3FineTuneSetup
 from modules.modelSetup.StableDiffusion3LoRASetup import StableDiffusion3LoRASetup
 from modules.modelSetup.StableDiffusionEmbeddingSetup import StableDiffusionEmbeddingSetup
@@ -1726,6 +1727,10 @@ def create_trainer(
         commands: TrainCommands,
         reattach: bool = False,
 ):
+    # Ensure concepts/samples are materialized from files so training does not rely
+    # on concept_file_name/sample_definition_file_name being present at runtime.
+    # This also keeps behavior consistent with cloud training, which packs concepts.
+    config = TrainConfig.default_values().from_dict(config.to_pack_dict(secrets=True))
     # Restore local paths if cloud is disabled
     _restore_local_paths(config)
     

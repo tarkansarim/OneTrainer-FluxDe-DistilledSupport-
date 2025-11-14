@@ -88,7 +88,7 @@ class LinuxCloud(BaseCloud):
         venv_pip = f"{onetrainer_dir}/venv/bin/pip"
         
         # Test if mgds can be imported
-        test_cmd = f"cd {shlex.quote(onetrainer_dir)} && {venv_python} -c \"import mgds.MGDS; print('mgds import successful')\" 2>&1"
+        test_cmd = f"cd {shlex.quote(onetrainer_dir)} && export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/usr/local/cuda/lib64:/usr/local/cuda/compat:/usr/lib/x86_64-linux-gnu && {venv_python} -c \"import mgds.MGDS; print('mgds import successful')\" 2>&1"
         result = self.connection.run(test_cmd, in_stream=False, warn=True, hide='both')
         
         if result.exited == 0:
@@ -193,6 +193,7 @@ class LinuxCloud(BaseCloud):
         # This would cause prepare_runtime_environment to skip dependency installation
         # if the git hash hasn't changed, which breaks mgds editable install
         base_cmd_env = f"export PATH=$PATH:/usr/local/cuda/bin:/venv/main/bin \
+                         && export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/usr/local/cuda/lib64:/usr/local/cuda/compat:/usr/lib/x86_64-linux-gnu \
                          && cd {shlex.quote(config.onetrainer_dir)}"
 
         if result.exited == 0:
@@ -276,6 +277,7 @@ class LinuxCloud(BaseCloud):
         self._verify_mgds_import(config.onetrainer_dir)
 
         cmd="export PATH=$PATH:/usr/local/cuda/bin:/venv/main/bin \
+             && export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/usr/local/cuda/lib64:/usr/local/cuda/compat:/usr/lib/x86_64-linux-gnu \
              && export PYTHONUNBUFFERED=1 \
              && export CUDA_LAUNCH_BLOCKING=${CUDA_LAUNCH_BLOCKING:-1} \
              && export NCCL_DEBUG=${NCCL_DEBUG:-INFO} \
@@ -292,6 +294,10 @@ class LinuxCloud(BaseCloud):
         # Ensure prepare_runtime_environment installs dependencies properly
         # by unsetting OT_LAZY_UPDATES, which would otherwise skip dependency checks
         cmd+=f' && cd {shlex.quote(config.onetrainer_dir)} && unset OT_LAZY_UPDATES'
+        # Ensure accelerate is available in the venv (some base images may have stale envs)
+        venv_python = f"{config.onetrainer_dir}/venv/bin/python"
+        venv_pip = f"{config.onetrainer_dir}/venv/bin/pip"
+        cmd+=f" && ({shlex.quote(venv_python)} -c 'import accelerate' || {shlex.quote(venv_pip)} install --upgrade --no-cache-dir accelerate==1.7.0)"
 
         cmd+=f' && {config.onetrainer_dir}/run-cmd.sh train_remote --config-path={shlex.quote(self.config_file)} \
                                                                    --callback-path={shlex.quote(self.callback_file)} \

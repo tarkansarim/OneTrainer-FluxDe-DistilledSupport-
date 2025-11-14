@@ -1,0 +1,169 @@
+[
+    {
+        "__version": 2,
+        "image": {
+            "__version": 0,
+            "enable_crop_jitter": true,
+            "enable_random_flip": false,
+            "enable_fixed_flip": false,
+            "enable_random_rotate": true,
+            "enable_fixed_rotate": false,
+            "random_rotate_max_angle": 0.15,
+            "enable_random_brightness": true,
+            "enable_fixed_brightness": false,
+            "random_brightness_max_strength": 0.15,
+            "enable_random_contrast": true,
+            "enable_fixed_contrast": false,
+            "random_contrast_max_strength": 0.15,
+            "enable_random_saturation": true,
+            "enable_fixed_saturation": false,
+            "random_saturation_max_strength": 0.15,
+            "enable_random_hue": true,
+            "enable_fixed_hue": false,
+            "random_hue_max_strength": 0.03,
+            "enable_resolution_override": false,
+            "resolution_override": "512",
+            "enable_random_circular_mask_shrink": false,
+            "enable_random_mask_rotate_crop": false,
+            "detail_crops": {
+                "__version": 0,
+                "enabled": false,
+                "tile_resolution": 1024,
+                "overlap": 128,
+                "include_context_tiles": false,
+                "include_full_images": true,
+                "blank_std_threshold": 0.001,
+                "blank_edge_threshold": 0.015,
+                "parallel_workers": 0,
+                "regenerate_each_epoch": false,
+                "enable_captioning": false,
+                "caption_probability": 0.2,
+                "caption_model": "qwen2.5vl:3b",
+                "caption_system_prompt": "You are an image tagging assistant for training detail crops. Produce concise comma-separated descriptors of what is visible in the crop. Use the provided context caption when it helps disambiguate close-ups. Never invent objects that are not clearly present.",
+                "caption_user_prompt": "Context caption: \"{context}\"\nDescribe the visual content of this crop using comma-separated tags (max 30 words). Focus on objects, materials, textures, colors, lighting, and fine details. If the crop is too ambiguous, respond with \"unclear_crop\".",
+                "caption_endpoint": "http://localhost:11434",
+                "caption_timeout": 120.0,
+                "caption_max_retries": 4,
+                "caption_auto_pull": true,
+                "scales": [],
+                "save_to_disk": false,
+                "save_directory": "",
+                "save_max_tiles_per_image": 0
+            },
+            "enable_luma_normalize": true,
+            "luma_target_mean": 0.5,
+            "luma_target_std": 0.25,
+            "luma_mix": 1.0
+        },
+        "text": {
+            "__version": 0,
+            "prompt_source": "sample",
+            "prompt_path": "",
+            "enable_tag_shuffling": true,
+            "tag_delimiter": ",",
+            "keep_tags_count": 1,
+            "tag_dropout_enable": true,
+            "tag_dropout_mode": "FULL",
+            "tag_dropout_probability": 0.1,
+            "tag_dropout_special_tags_mode": "NONE",
+            "tag_dropout_special_tags": "",
+            "tag_dropout_special_tags_regex": false,
+            "caps_randomize_enable": true,
+            "caps_randomize_mode": "capslock, title, first, random",
+            "caps_randomize_probability": 0.1,
+            "caps_randomize_lowercase": false
+        },
+        "name": "",
+        "path": "H:/AI/Training_Data/TRAINING/Calvin/sergsfh/selects",
+        "seed": -151295820,
+        "enabled": true,
+        "type": "STANDARD",
+        "include_subdirectories": false,
+        "image_variations": 1,
+        "text_variations": 1,
+        "balancing": 5.0,
+        "balancing_strategy": "REPEATS",
+        "loss_weight": 1.0,
+        "concept_stats": {
+            "file_size": 216140228,
+            "image_count": 44,
+            "image_with_mask_count": 0,
+            "image_with_caption_count": 44,
+            "video_count": 0,
+            "video_with_mask_count": 0,
+            "video_with_caption_count": 0,
+            "mask_count": 0,
+            "paired_masks": 0,
+            "unpaired_masks": 0,
+            "caption_count": 44,
+            "subcaption_count": 132,
+            "paired_captions": 44,
+            "unpaired_captions": 0,
+            "processing_time": 0.04910560000280384,
+            "directory_count": 1,
+            "max_pixels": [
+                16515072,
+                "Calvin.0035.png",
+                "5376w x 3072h"
+            ],
+            "min_pixels": [
+                849408,
+                "Calvin.0010.png",
+                "1106w x 768h"
+            ],
+            "avg_pixels": 5917893.818181818,
+            "max_length": [
+                0,
+                "-"
+            ],
+            "min_length": [
+                1000000000,
+                "-"
+            ],
+            "avg_length": 0,
+            "max_fps": [
+                0,
+                "-"
+            ],
+            "min_fps": [
+                1000000000,
+                "-"
+            ],
+            "avg_fps": 0,
+            "max_caption_length": [
+                1452,
+                "Calvin.0044.png",
+                235
+            ],
+            "min_caption_length": [
+                0,
+                "Calvin.0001.jpeg",
+                0
+            ],
+            "avg_caption_length": [
+                517.5010565364388,
+                80.30861429376408
+            ],
+            "aspect_buckets": {
+                "0.25": 0,
+                "0.285714": 0,
+                "0.333333": 0,
+                "0.4": 0,
+                "0.5": 0,
+                "0.571429": 33,
+                "0.666667": 11,
+                "0.8": 0,
+                "1.0": 0,
+                "1.25": 0,
+                "1.5": 0,
+                "1.75": 0,
+                "2.0": 0,
+                "2.5": 0,
+                "3.0": 0,
+                "3.5": 0,
+                "4.0": 0
+            },
+            "force_cancelled": false
+        }
+    }
+]
