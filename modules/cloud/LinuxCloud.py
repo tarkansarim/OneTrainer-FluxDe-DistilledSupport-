@@ -32,6 +32,8 @@ class LinuxCloud(BaseCloud):
             ((530, 30, 2), "https://download.pytorch.org/whl/cu121", "2.4.1+cu121", "0.19.1+cu121"),
             ((520, 61, 5), "https://download.pytorch.org/whl/cu118", "2.3.1+cu118", "0.18.1+cu118"),
         ]
+        # Initialize standard remote paths
+        self._ensure_remote_paths()
 
     @staticmethod
     def _parse_driver_version(ver: str) -> tuple[int, int, int]:
@@ -49,6 +51,35 @@ class LinuxCloud(BaseCloud):
         # Extremely old driver: pick the oldest known compatible
         _, index_url, torch_ver, tv_ver = self._cuda_thresholds[-1]
         return index_url, torch_ver, tv_ver
+
+    def _ensure_remote_paths(self):
+        """
+        Ensure that command/callback/config/pid/log/exit paths are initialized.
+        Derive a consistent 'name' from existing config_file if present,
+        otherwise from run_id (detached) or a timestamp (attached runs).
+        """
+        remote_dir = self.config.cloud.remote_dir
+        name = None
+        try:
+            if getattr(self, "config_file", None):
+                name = Path(self.config_file).stem
+        except Exception:
+            name = None
+        if not name:
+            try:
+                if self.config.cloud.detach_trainer and self.config.cloud.run_id:
+                    name = self.config.cloud.run_id
+                else:
+                    name = get_string_timestamp()
+            except Exception:
+                name = "job1"
+        # Set all paths consistently
+        self.callback_file = f'{remote_dir}/{name}.callback'
+        self.command_pipe = f'{remote_dir}/{name}.command'
+        self.config_file = f'{remote_dir}/{name}.json'
+        self.exit_status_file = f'{remote_dir}/{name}.exit'
+        self.log_file = f'{remote_dir}/{name}.log'
+        self.pid_file = f'{remote_dir}/{name}.pid'
 
         name=config.cloud.run_id if config.cloud.detach_trainer else get_string_timestamp()
         self.callback_file=f'{config.cloud.remote_dir}/{name}.callback'
@@ -99,6 +130,8 @@ class LinuxCloud(BaseCloud):
 
     def setup(self):
         super().setup()
+        # Ensure remote path attributes exist
+        self._ensure_remote_paths()
         self.connection.run(f'mkfifo {shlex.quote(self.command_pipe)}',warn=True,hide=True,in_stream=False)
 
     def _verify_mgds_import(self, onetrainer_dir: str) -> bool:
@@ -326,18 +359,12 @@ class LinuxCloud(BaseCloud):
             self.connection=None
 
     def can_reattach(self):
-        # Be resilient if attributes weren't initialized for any reason
-        pid_path = getattr(self, "pid_file", None)
-        if not pid_path:
-            try:
-                name = self.config.cloud.run_id if self.config.cloud.detach_trainer else ""
-                if not name:
-                    return False
-                pid_path = f'{self.config.cloud.remote_dir}/{name}.pid'
-                self.pid_file = pid_path
-            except Exception:
-                return False
-        result=self.connection.run(f"test -f {shlex.quote(pid_path)}",warn=True,in_stream=False)
+        # Ensure paths are present, then check pid file
+        try:
+            self._ensure_remote_paths()
+        except Exception:
+            return False
+        result=self.connection.run(f"test -f {shlex.quote(self.pid_file)}",warn=True,in_stream=False)
         return result.exited == 0
 
     def _get_action_cmd(self,action : CloudAction):
