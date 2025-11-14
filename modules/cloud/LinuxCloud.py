@@ -183,6 +183,11 @@ class LinuxCloud(BaseCloud):
             self.connection.run(fix_remote_cmd, in_stream=False)
             print(f"Set git remote to: {expected_repo_url}")
 
+        # Always pull latest code so runtime fixes (e.g., ZLUDA guard, CUDA preflight) are present,
+        # even when recreating the venv (fresh install path).
+        pull_latest_cmd = f"{cmd_env_check} && git fetch --all --prune && git reset --hard origin/master"
+        self.connection.run(pull_latest_cmd, in_stream=False, warn=True)
+
         result=self.connection.run(f"test -d {shlex.quote(config.onetrainer_dir)}/venv",warn=True,in_stream=False)
 
         #many docker images, including the default ones on RunPod and vast.ai, only set up $PATH correctly
