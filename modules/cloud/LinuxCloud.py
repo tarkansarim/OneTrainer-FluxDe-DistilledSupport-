@@ -225,6 +225,42 @@ class LinuxCloud(BaseCloud):
             # Fresh install: unset OT_LAZY_UPDATES to ensure all dependencies install correctly
             self.connection.run(base_cmd_env + " && unset OT_LAZY_UPDATES && ./install.sh", in_stream=False)
         
+        # Validate CUDA driver and Torch compatibility; fall back to a lower CUDA tag if necessary.
+        try:
+            venv_python = f"{config.onetrainer_dir}/venv/bin/python"
+            venv_pip = f"{config.onetrainer_dir}/venv/bin/pip"
+            # Get driver version (may fail on some images)
+            drv = self.connection.run("nvidia-smi --query-gpu=driver_version --format=csv,noheader | head -n1", in_stream=False, warn=True, hide='both')
+            driver_version = (drv.stdout or "").strip()
+            # Test if torch can initialize CUDA; catch any exception in Python side and return specific exit code 42
+            test_cuda = (
+                f"{shlex.quote(venv_python)} -c "
+                "\"import sys, traceback; "
+                "import torch; "
+                "ok=True; "
+                "try:\\n import torch.cuda as _c; _= _c.device_count()\\n"
+                "except Exception as e:\\n print('CUDA_INIT_FAIL:', e); ok=False\\n"
+                "sys.exit(0 if ok else 42)\""
+            )
+            result = self.connection.run(test_cuda, in_stream=False, warn=True, hide='both')
+            if result.exited == 42:
+                # Fallback: choose cu124 wheels which require a slightly older driver
+                print(f\"CUDA initialization failed (driver={driver_version}). Falling back to cu124 wheels for Torch.\")
+                fallback = (
+                    f"{shlex.quote(venv_pip)} uninstall -y torch torchvision triton "
+                    "nvidia-cuda-nvrtc-cu12 nvidia-cuda-runtime-cu12 nvidia-cuda-cupti-cu12 "
+                    "nvidia-cudnn-cu12 nvidia-cublas-cu12 nvidia-cufft-cu12 nvidia-curand-cu12 "
+                    "nvidia-cusolver-cu12 nvidia-cusparse-cu12 nvidia-cusparselt-cu12 "
+                    "nvidia-nccl-cu12 nvidia-nvtx-cu12 nvidia-nvjitlink-cu12 nvidia-cufile-cu12; "
+                    f"{shlex.quote(venv_pip)} install --upgrade --no-cache-dir "
+                    "--index-url https://download.pytorch.org/whl/cu124 "
+                    "torch==2.6.0+cu124 torchvision==0.21.0+cu124"
+                )
+                self.connection.run(fallback, in_stream=False, warn=True)
+        except Exception:
+            # Never derail installation if detection fails
+            pass
+        
         # Verify mgds can be imported after installation/update
         # This ensures the editable install worked correctly
         venv_exists = self.connection.run(f"test -d {shlex.quote(config.onetrainer_dir)}/venv", warn=True, in_stream=False)
