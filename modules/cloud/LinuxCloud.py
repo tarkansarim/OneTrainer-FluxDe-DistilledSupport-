@@ -235,12 +235,12 @@ class LinuxCloud(BaseCloud):
             # Test if torch can initialize CUDA; catch any exception in Python side and return specific exit code 42
             test_cuda = (
                 f"{shlex.quote(venv_python)} -c "
-                "\"import sys, traceback; "
-                "import torch; "
-                "ok=True; "
-                "try:\\n import torch.cuda as _c; _= _c.device_count()\\n"
-                "except Exception as e:\\n print('CUDA_INIT_FAIL:', e); ok=False\\n"
-                "sys.exit(0 if ok else 42)\""
+                "\"import sys; import torch; "
+                "try:\\n import torch.cuda as _c; n=_c.device_count(); "
+                "print(f'CUDA_DEVICES={n}'); "
+                "sys.exit(0 if n and n>0 else 42)\\n"
+                "except Exception as e:\\n "
+                " print('CUDA_INIT_FAIL:', e); sys.exit(42)\""
             )
             result = self.connection.run(test_cuda, in_stream=False, warn=True, hide='both')
             if result.exited == 42:
