@@ -376,6 +376,35 @@ class LinuxCloud(BaseCloud):
             venv_pip = f"{config.onetrainer_dir}/venv/bin/pip"
             drv = self.connection.run("nvidia-smi --query-gpu=driver_version --format=csv,noheader | head -n1", in_stream=False, warn=True, hide='both')
             driver_version = (drv.stdout or "").strip()
+            # Compare installed Torch CUDA tag to what the driver supports; realign if mismatched
+            torch_ver_out = self.connection.run(f"{shlex.quote(venv_python)} -c \"import torch; print(getattr(torch,'__version__',''))\"", in_stream=False, warn=True, hide='both')
+            installed_torch = (torch_ver_out.stdout or "").strip()
+            idx_url_target, torch_target, tv_target = self._select_torch_wheels_for_driver(driver_version)
+            need_realign = False
+            if installed_torch:
+                # Expect a suffix like +cu128/+cu124; if absent or different, realign
+                if "+cu" not in installed_torch:
+                    need_realign = True
+                elif f"+{torch_target.split('+')[-1]}" not in installed_torch:
+                    need_realign = True
+            else:
+                need_realign = True
+            if need_realign:
+                print(f"Adjusting Torch for driver {driver_version}: installing {torch_target}/{tv_target} from {idx_url_target}")
+                uninstall = (
+                    f"{shlex.quote(venv_pip)} uninstall -y torch torchvision triton "
+                    "nvidia-cuda-nvrtc-cu12 nvidia-cuda-runtime-cu12 nvidia-cuda-cupti-cu12 "
+                    "nvidia-cudnn-cu12 nvidia-cublas-cu12 nvidia-cufft-cu12 nvidia-curand-cu12 "
+                    "nvidia-cusolver-cu12 nvidia-cusparse-cu12 nvidia-cusparselt-cu12 "
+                    "nvidia-nccl-cu12 nvidia-nvtx-cu12 nvidia-nvjitlink-cu12 nvidia-cufile-cu12"
+                )
+                self.connection.run(uninstall, in_stream=False, warn=True)
+                install = (
+                    f"{shlex.quote(venv_pip)} install --upgrade --force-reinstall --no-cache-dir "
+                    f"--index-url {shlex.quote(idx_url_target)} "
+                    f"torch=={torch_target} torchvision=={tv_target}"
+                )
+                self.connection.run(install, in_stream=False, warn=True)
             test_cuda = (
                 f"{shlex.quote(venv_python)} -c "
                 "\"import sys; import torch; "
