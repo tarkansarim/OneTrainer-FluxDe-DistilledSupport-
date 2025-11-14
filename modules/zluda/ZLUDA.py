@@ -1,5 +1,6 @@
 
 from modules.util.config.TrainConfig import TrainConfig
+import os
 
 import torch
 from torch._prims_common import DeviceLikeType
@@ -41,6 +42,9 @@ def initialize():
 
 
 def initialize_devices(config: TrainConfig):
+    # Allow disabling ZLUDA probing via environment (used on cloud when drivers mismatch)
+    if os.environ.get("OT_DISABLE_ZLUDA", "").lower() in ("1", "true", "yes"):
+        return
     if not is_zluda(config.train_device) and not is_zluda(config.temp_device):
         return
     devices = [config.train_device, config.temp_device,]

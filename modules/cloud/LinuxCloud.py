@@ -319,6 +319,7 @@ class LinuxCloud(BaseCloud):
 
         cmd="export PATH=$PATH:/usr/local/cuda/bin:/venv/main/bin \
              && export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/usr/local/cuda/lib64:/usr/local/cuda/compat:/usr/lib/x86_64-linux-gnu \
+             && export OT_DISABLE_ZLUDA=1 \
              && export PYTHONUNBUFFERED=1 \
              && export CUDA_LAUNCH_BLOCKING=${CUDA_LAUNCH_BLOCKING:-1} \
              && export NCCL_DEBUG=${NCCL_DEBUG:-INFO} \
@@ -334,7 +335,8 @@ class LinuxCloud(BaseCloud):
 
         # Ensure prepare_runtime_environment installs dependencies properly
         # by unsetting OT_LAZY_UPDATES, which would otherwise skip dependency checks
-        cmd+=f' && cd {shlex.quote(config.onetrainer_dir)} && unset OT_LAZY_UPDATES'
+        # Also force-sync repo to latest master on the pod to ensure runtime fixes are applied.
+        cmd+=f' && cd {shlex.quote(config.onetrainer_dir)} && git fetch --all --prune && git reset --hard origin/master && unset OT_LAZY_UPDATES'
         # Ensure accelerate is available in the venv (some base images may have stale envs)
         venv_python = f"{config.onetrainer_dir}/venv/bin/python"
         venv_pip = f"{config.onetrainer_dir}/venv/bin/pip"
