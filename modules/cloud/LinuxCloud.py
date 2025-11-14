@@ -331,18 +331,37 @@ class LinuxCloud(BaseCloud):
             )
             result = self.connection.run(test_cuda, in_stream=False, warn=True, hide='both')
             if result.exited == 42:
-                print(f"CUDA preflight failed (driver={driver_version}). Reinstalling Torch/cu124 before launch...")
-                fallback = (
+                print(f"CUDA preflight failed (driver={driver_version}). Trying compatible Torch/CUDA wheels...")
+                # Try progressively older CUDA builds until initialization succeeds
+                candidates = [
+                    ("https://download.pytorch.org/whl/cu124", "2.6.0+cu124", "0.21.0+cu124"),
+                    ("https://download.pytorch.org/whl/cu121", "2.4.1+cu121", "0.19.1+cu121"),
+                    ("https://download.pytorch.org/whl/cu118", "2.3.1+cu118", "0.18.1+cu118"),
+                ]
+                uninstall = (
                     f"{shlex.quote(venv_pip)} uninstall -y torch torchvision triton "
                     "nvidia-cuda-nvrtc-cu12 nvidia-cuda-runtime-cu12 nvidia-cuda-cupti-cu12 "
                     "nvidia-cudnn-cu12 nvidia-cublas-cu12 nvidia-cufft-cu12 nvidia-curand-cu12 "
                     "nvidia-cusolver-cu12 nvidia-cusparse-cu12 nvidia-cusparselt-cu12 "
-                    "nvidia-nccl-cu12 nvidia-nvtx-cu12 nvidia-nvjitlink-cu12 nvidia-cufile-cu12; "
-                    f"{shlex.quote(venv_pip)} install --upgrade --no-cache-dir "
-                    "--index-url https://download.pytorch.org/whl/cu124 "
-                    "torch==2.6.0+cu124 torchvision==0.21.0+cu124"
+                    "nvidia-nccl-cu12 nvidia-nvtx-cu12 nvidia-nvjitlink-cu12 nvidia-cufile-cu12"
                 )
-                self.connection.run(fallback, in_stream=False, warn=True)
+                for index_url, torch_ver, tv_ver in candidates:
+                    try:
+                        self.connection.run(uninstall, in_stream=False, warn=True)
+                        install = (
+                            f"{shlex.quote(venv_pip)} install --upgrade --force-reinstall --no-cache-dir "
+                            f"--index-url {shlex.quote(index_url)} "
+                            f"torch=={torch_ver} torchvision=={tv_ver}"
+                        )
+                        self.connection.run(install, in_stream=False, warn=True)
+                        # Re-test
+                        r2 = self.connection.run(test_cuda, in_stream=False, warn=True, hide='both')
+                        if r2.exited == 0:
+                            print(f"Torch/CUDA fallback successful with {torch_ver}.")
+                            break
+                    except Exception:
+                        # try next candidate
+                        pass
         except Exception:
             pass
 
