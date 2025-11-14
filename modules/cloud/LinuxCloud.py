@@ -312,6 +312,39 @@ class LinuxCloud(BaseCloud):
         if self.can_reattach():
             self.__trail_detached_trainer()
             return
+        
+        # Last-minute CUDA compatibility preflight: if current Torch cannot initialize CUDA,
+        # switch to cu124 wheels which have lower driver requirements.
+        try:
+            venv_python = f"{config.onetrainer_dir}/venv/bin/python"
+            venv_pip = f"{config.onetrainer_dir}/venv/bin/pip"
+            drv = self.connection.run("nvidia-smi --query-gpu=driver_version --format=csv,noheader | head -n1", in_stream=False, warn=True, hide='both')
+            driver_version = (drv.stdout or "").strip()
+            test_cuda = (
+                f"{shlex.quote(venv_python)} -c "
+                "\"import sys; import torch; "
+                "try:\\n import torch.cuda as _c; n=_c.device_count(); "
+                "print(f'CUDA_DEVICES={n}'); "
+                "sys.exit(0 if n and n>0 else 42)\\n"
+                "except Exception as e:\\n "
+                " print('CUDA_INIT_FAIL:', e); sys.exit(42)\""
+            )
+            result = self.connection.run(test_cuda, in_stream=False, warn=True, hide='both')
+            if result.exited == 42:
+                print(f"CUDA preflight failed (driver={driver_version}). Reinstalling Torch/cu124 before launch...")
+                fallback = (
+                    f"{shlex.quote(venv_pip)} uninstall -y torch torchvision triton "
+                    "nvidia-cuda-nvrtc-cu12 nvidia-cuda-runtime-cu12 nvidia-cuda-cupti-cu12 "
+                    "nvidia-cudnn-cu12 nvidia-cublas-cu12 nvidia-cufft-cu12 nvidia-curand-cu12 "
+                    "nvidia-cusolver-cu12 nvidia-cusparse-cu12 nvidia-cusparselt-cu12 "
+                    "nvidia-nccl-cu12 nvidia-nvtx-cu12 nvidia-nvjitlink-cu12 nvidia-cufile-cu12; "
+                    f"{shlex.quote(venv_pip)} install --upgrade --no-cache-dir "
+                    "--index-url https://download.pytorch.org/whl/cu124 "
+                    "torch==2.6.0+cu124 torchvision==0.21.0+cu124"
+                )
+                self.connection.run(fallback, in_stream=False, warn=True)
+        except Exception:
+            pass
 
         # Verify mgds can be imported before training starts
         # This catches any issues with editable installs before training fails
