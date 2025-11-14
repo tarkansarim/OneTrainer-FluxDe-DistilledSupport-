@@ -81,14 +81,6 @@ class LinuxCloud(BaseCloud):
         self.log_file = f'{remote_dir}/{name}.log'
         self.pid_file = f'{remote_dir}/{name}.pid'
 
-        name=config.cloud.run_id if config.cloud.detach_trainer else get_string_timestamp()
-        self.callback_file=f'{config.cloud.remote_dir}/{name}.callback'
-        self.command_pipe=f'{config.cloud.remote_dir}/{name}.command'
-        self.config_file=f'{config.cloud.remote_dir}/{name}.json'
-        self.exit_status_file=f'{config.cloud.remote_dir}/{name}.exit'
-        self.log_file=f'{config.cloud.remote_dir}/{name}.log'
-        self.pid_file=f'{config.cloud.remote_dir}/{name}.pid'
-
     def _connect(self):
         if self.connection:
             return
