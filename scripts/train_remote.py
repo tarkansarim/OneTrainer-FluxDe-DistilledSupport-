@@ -9,7 +9,16 @@ import threading
 import traceback
 from contextlib import suppress
 
+# Disable ZLUDA probing on remote to avoid CUDA init issues due to driver/runtime mismatch.
+os.environ["OT_DISABLE_ZLUDA"] = "1"
+
 from modules.util import create
+# As an extra safeguard, ensure any ZLUDA device probing is a no-op on remote.
+try:
+    from modules.zluda import ZLUDA as _ZLUDA
+    _ZLUDA.initialize_devices = lambda *_, **__: None
+except Exception:
+    pass
 from modules.util.args.TrainArgs import TrainArgs
 from modules.util.callbacks.TrainCallbacks import TrainCallbacks
 from modules.util.commands.TrainCommands import TrainCommands
