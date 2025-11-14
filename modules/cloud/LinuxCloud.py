@@ -250,7 +250,7 @@ class LinuxCloud(BaseCloud):
             result = self.connection.run(test_cuda, in_stream=False, warn=True, hide='both')
             if result.exited == 42:
                 # Fallback: choose cu124 wheels which require a slightly older driver
-                print(f\"CUDA initialization failed (driver={driver_version}). Falling back to cu124 wheels for Torch.\")
+                print(f"CUDA initialization failed (driver={driver_version}). Falling back to cu124 wheels for Torch.")
                 fallback = (
                     f"{shlex.quote(venv_pip)} uninstall -y torch torchvision triton "
                     "nvidia-cuda-nvrtc-cu12 nvidia-cuda-runtime-cu12 nvidia-cuda-cupti-cu12 "
