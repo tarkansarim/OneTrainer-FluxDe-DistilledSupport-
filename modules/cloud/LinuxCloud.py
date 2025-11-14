@@ -326,7 +326,18 @@ class LinuxCloud(BaseCloud):
             self.connection=None
 
     def can_reattach(self):
-        result=self.connection.run(f"test -f {self.pid_file}",warn=True,in_stream=False)
+        # Be resilient if attributes weren't initialized for any reason
+        pid_path = getattr(self, "pid_file", None)
+        if not pid_path:
+            try:
+                name = self.config.cloud.run_id if self.config.cloud.detach_trainer else ""
+                if not name:
+                    return False
+                pid_path = f'{self.config.cloud.remote_dir}/{name}.pid'
+                self.pid_file = pid_path
+            except Exception:
+                return False
+        result=self.connection.run(f"test -f {shlex.quote(pid_path)}",warn=True,in_stream=False)
         return result.exited == 0
 
     def _get_action_cmd(self,action : CloudAction):
