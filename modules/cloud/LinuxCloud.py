@@ -365,23 +365,35 @@ class LinuxCloud(BaseCloud):
         return ":"
 
     def run_trainer(self):
-        config=self.config.cloud
+        config = self.config.cloud
         # Track selected Torch/CUDA wheel choice to rewrite requirements-cuda.txt before runtime install
         selected_index_url: str | None = None
         selected_torch: str | None = None
         selected_tv: str | None = None
+        must_reinstall: bool = False
+        cuda_ok: bool = True
         if self.can_reattach():
             self.__trail_detached_trainer()
             return
-        
+
         # Last-minute CUDA compatibility preflight: select a single Torch/CUDA build based on driver version.
         try:
             venv_python = f"{config.onetrainer_dir}/venv/bin/python"
             venv_pip = f"{config.onetrainer_dir}/venv/bin/pip"
-            drv = self.connection.run("nvidia-smi --query-gpu=driver_version --format=csv,noheader | head -n1", in_stream=False, warn=True, hide='both')
+            drv = self.connection.run(
+                "nvidia-smi --query-gpu=driver_version --format=csv,noheader | head -n1",
+                in_stream=False,
+                warn=True,
+                hide='both',
+            )
             driver_version = (drv.stdout or "").strip()
             # Compare installed Torch CUDA tag to what the driver supports; realign if mismatched
-            torch_ver_out = self.connection.run(f"{shlex.quote(venv_python)} -c \"import torch; print(getattr(torch,'__version__',''))\"", in_stream=False, warn=True, hide='both')
+            torch_ver_out = self.connection.run(
+                f"{shlex.quote(venv_python)} -c \"import torch; print(getattr(torch,'__version__',''))\"",
+                in_stream=False,
+                warn=True,
+                hide='both',
+            )
             installed_torch = (torch_ver_out.stdout or "").strip()
             idx_url_target, torch_target, tv_target = self._select_torch_wheels_for_driver(driver_version)
             selected_index_url, selected_torch, selected_tv = idx_url_target, torch_target, tv_target
@@ -396,6 +408,7 @@ class LinuxCloud(BaseCloud):
                 need_realign = True
             if need_realign:
                 print(f"Adjusting Torch for driver {driver_version}: installing {torch_target}/{tv_target} from {idx_url_target}")
+                must_reinstall = True
                 uninstall = (
                     f"{shlex.quote(venv_pip)} uninstall -y torch torchvision triton "
                     "nvidia-cuda-nvrtc-cu12 nvidia-cuda-runtime-cu12 nvidia-cuda-cupti-cu12 "
@@ -424,6 +437,7 @@ class LinuxCloud(BaseCloud):
                 index_url, torch_ver, tv_ver = self._select_torch_wheels_for_driver(driver_version)
                 selected_index_url, selected_torch, selected_tv = index_url, torch_ver, tv_ver
                 print(f"CUDA preflight failed (driver={driver_version}). Installing Torch {torch_ver} / torchvision {tv_ver} from {index_url}...")
+                must_reinstall = True
                 uninstall = (
                     f"{shlex.quote(venv_pip)} uninstall -y torch torchvision triton "
                     "nvidia-cuda-nvrtc-cu12 nvidia-cuda-runtime-cu12 nvidia-cuda-cupti-cu12 "
@@ -459,40 +473,47 @@ class LinuxCloud(BaseCloud):
                         f"torch=={torch_ver2} torchvision=={tv_ver2}"
                     )
                     self.connection.run(install2, in_stream=False, warn=True)
+                    # Final re-test after fallback
+                    r3 = self.connection.run(test_cuda, in_stream=False, warn=True, hide='both')
+                    cuda_ok = (r3.exited == 0)
+                else:
+                    cuda_ok = True
+            else:
+                # If initial test passed, CUDA is OK
+                cuda_ok = True
         except Exception:
             pass
+        # If CUDA still not OK here, stop before launching training to avoid repeated crashes
+        if not cuda_ok:
+            raise RuntimeError("CUDA initialization failed after alignment attempts. Please reopen on a newer driver pod or contact support.")
 
         # Verify mgds can be imported before training starts
         # This catches any issues with editable installs before training fails
         self._verify_mgds_import(config.onetrainer_dir)
 
-        cmd="export PATH=$PATH:/usr/local/cuda/bin:/venv/main/bin \
-             && export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/usr/local/cuda/lib64:/usr/local/cuda/compat:/usr/lib/x86_64-linux-gnu \
-             && export OT_DISABLE_ZLUDA=1 \
-             && export PYTHONUNBUFFERED=1 \
-             && export CUDA_LAUNCH_BLOCKING=${CUDA_LAUNCH_BLOCKING:-1} \
-             && export NCCL_DEBUG=${NCCL_DEBUG:-INFO} \
-             && export NCCL_P2P_DISABLE=${NCCL_P2P_DISABLE:-1} \
-             && export TORCH_NCCL_ASYNC_ERROR_HANDLING=${TORCH_NCCL_ASYNC_ERROR_HANDLING:-1} \
-             && export NCCL_ASYNC_ERROR_HANDLING=${NCCL_ASYNC_ERROR_HANDLING:-1} \
-             && export TORCH_SHOW_CPP_STACKTRACES=${TORCH_SHOW_CPP_STACKTRACES:-1}"
+        cmd = "export PATH=$PATH:/usr/local/cuda/bin:/venv/main/bin " \
+              "&& export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/usr/local/cuda/lib64:/usr/local/cuda/compat:/usr/lib/x86_64-linux-gnu " \
+              "&& export OT_DISABLE_ZLUDA=1 " \
+              "&& export PYTHONUNBUFFERED=1 " \
+              "&& export CUDA_LAUNCH_BLOCKING=${CUDA_LAUNCH_BLOCKING:-1} " \
+              "&& export NCCL_DEBUG=${NCCL_DEBUG:-INFO} " \
+              "&& export NCCL_P2P_DISABLE=${NCCL_P2P_DISABLE:-1} " \
+              "&& export TORCH_NCCL_ASYNC_ERROR_HANDLING=${TORCH_NCCL_ASYNC_ERROR_HANDLING:-1} " \
+              "&& export NCCL_ASYNC_ERROR_HANDLING=${NCCL_ASYNC_ERROR_HANDLING:-1} " \
+              "&& export TORCH_SHOW_CPP_STACKTRACES=${TORCH_SHOW_CPP_STACKTRACES:-1} " \
+              "&& export PIP_CACHE_DIR=${PIP_CACHE_DIR:-/workspace/pip_cache} " \
+              "&& mkdir -p ${PIP_CACHE_DIR:-/workspace/pip_cache}"
 
         if self.config.secrets.huggingface_token != "":
-            cmd+=f" && export HF_TOKEN={self.config.secrets.huggingface_token}"
+            cmd += f" && export HF_TOKEN={self.config.secrets.huggingface_token}"
         if config.huggingface_cache_dir != "":
-            cmd+=f" && export HF_HOME={config.huggingface_cache_dir}"
+            cmd += f" && export HF_HOME={config.huggingface_cache_dir}"
 
-        # Ensure prepare_runtime_environment installs dependencies properly
-        # by unsetting OT_LAZY_UPDATES, which would otherwise skip dependency checks
-        # Also force-sync repo to latest master on the pod to ensure runtime fixes are applied.
-        cmd+=f' && cd {shlex.quote(config.onetrainer_dir)} && git fetch --all --prune && git reset --hard origin/master'
+        # Force-sync repo to latest master on the pod to ensure runtime fixes are applied.
+        cmd += f' && cd {shlex.quote(config.onetrainer_dir)} && git fetch --all --prune && git reset --hard origin/master'
         # Rewrite requirements-cuda.txt with the driver-compatible Torch/CUDA tag to avoid reinstalling the wrong wheels
         if selected_index_url and selected_torch and selected_tv:
-            safe_idx = shlex.quote(selected_index_url)
-            safe_torch = shlex.quote(selected_torch)
-            safe_tv = shlex.quote(selected_tv)
-            # Use POSIX-compliant sed invocations
-            cmd+=(
+            cmd += (
                 " && sed -i "
                 f"'s|^--extra-index-url .*|--extra-index-url {selected_index_url}|' requirements-cuda.txt"
                 " && sed -i "
@@ -500,31 +521,36 @@ class LinuxCloud(BaseCloud):
                 " && sed -i "
                 f"'s|^torchvision==.*|torchvision=={selected_tv}|' requirements-cuda.txt"
             )
-        # Finally, unset lazy updates to force prepare_runtime_environment to (re)install with the corrected requirements
-        cmd+=" && unset OT_LAZY_UPDATES"
+        # Control runtime installation behavior:
+        # - If we changed Torch/CUDA, force a reinstall once to lock in correct wheels
+        # - Otherwise, enable lazy updates to skip reinstall thrash on every run
+        if must_reinstall:
+            cmd += " && unset OT_LAZY_UPDATES"
+        else:
+            cmd += " && export OT_LAZY_UPDATES=1"
         # Ensure accelerate is available in the venv (some base images may have stale envs)
         venv_python = f"{config.onetrainer_dir}/venv/bin/python"
         venv_pip = f"{config.onetrainer_dir}/venv/bin/pip"
-        cmd+=f" && ({shlex.quote(venv_python)} -c 'import accelerate' || {shlex.quote(venv_pip)} install --upgrade --no-cache-dir accelerate==1.7.0)"
+        cmd += f" && ({shlex.quote(venv_python)} -c 'import accelerate' || {shlex.quote(venv_pip)} install --upgrade --no-cache-dir accelerate==1.7.0)"
 
-        cmd+=f' && {config.onetrainer_dir}/run-cmd.sh train_remote --config-path={shlex.quote(self.config_file)} \
-                                                                   --callback-path={shlex.quote(self.callback_file)} \
-                                                                   --command-path={shlex.quote(self.command_pipe)}'
+        cmd += f' && {config.onetrainer_dir}/run-cmd.sh train_remote --config-path={shlex.quote(self.config_file)} ' \
+               f'--callback-path={shlex.quote(self.callback_file)} ' \
+               f'--command-path={shlex.quote(self.command_pipe)}'
 
         if config.detach_trainer:
-            self.connection.run(f'rm -f {self.exit_status_file}',in_stream=False)
+            self.connection.run(f'rm -f {self.exit_status_file}', in_stream=False)
 
-            cmd=f"({cmd} ; exit_status=$? ; echo $exit_status > {self.exit_status_file}; exit $exit_status)"
+            cmd = f"({cmd} ; exit_status=$? ; echo $exit_status > {self.exit_status_file}; exit $exit_status)"
 
-            #if the callback file still exists 10 seconds after the trainer has exited, the client must be detached, because the clients reads and deletes this file:
-            cmd+=f" && (sleep 10 && test -f {shlex.quote(self.callback_file)} && {self._get_action_cmd(config.on_detached_finish)} || true) \
-                    || (sleep 10 && test -f {shlex.quote(self.callback_file)} && {self._get_action_cmd(config.on_detached_error)})"
+            # if the callback file still exists 10 seconds after the trainer has exited, the client must be detached, because the clients reads and deletes this file:
+            cmd += f" && (sleep 10 && test -f {shlex.quote(self.callback_file)} && {self._get_action_cmd(config.on_detached_finish)} || true) " \
+                   f"|| (sleep 10 && test -f {shlex.quote(self.callback_file)} && {self._get_action_cmd(config.on_detached_error)})"
 
-            cmd=f'(nohup true && {cmd}) > {self.log_file} 2>&1 & echo $! > {self.pid_file}'
-            self.connection.run(cmd,disown=True)
+            cmd = f'(nohup true && {cmd}) > {self.log_file} 2>&1 & echo $! > {self.pid_file}'
+            self.connection.run(cmd, disown=True)
             self.__trail_detached_trainer()
         else:
-            self.connection.run(cmd,in_stream=False)
+            self.connection.run(cmd, in_stream=False)
 
     def __trail_detached_trainer(self):
         cmd=f'tail -f {self.log_file} --pid $(<{self.pid_file})'
