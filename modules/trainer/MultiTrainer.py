@@ -4,6 +4,7 @@ import platform
 import subprocess
 import traceback
 from contextlib import suppress
+import socket
 
 import modules.util.multi_gpu_util as multi
 from modules.trainer.BaseTrainer import BaseTrainer
@@ -24,8 +25,19 @@ class MultiTrainer(BaseTrainer):
             print("Warning: Latent caching is disabled, but recommended for multi-GPU training!")
 
     def start(self):
-        os.environ.setdefault('MASTER_ADDR', 'localhost')
-        os.environ.setdefault('MASTER_PORT', '12355')
+        # Prefer explicit loopback to avoid name resolution issues on Windows
+        os.environ.setdefault('MASTER_ADDR', '127.0.0.1')
+        # Select a free TCP port if none provided to avoid bind conflicts (Windows often blocks fixed ports)
+        if 'MASTER_PORT' not in os.environ or not os.environ['MASTER_PORT']:
+            try:
+                with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+                    sock.bind(('127.0.0.1', 0))
+                    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                    free_port = sock.getsockname()[1]
+            except Exception:
+                # Fall back to a common default if dynamic allocation fails
+                free_port = 29500
+            os.environ['MASTER_PORT'] = str(free_port)
 
         if platform.system() == 'Linux': #topo is not supported on Windows
             with suppress(subprocess.CalledProcessError):

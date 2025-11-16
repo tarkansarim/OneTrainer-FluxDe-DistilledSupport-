@@ -366,6 +366,10 @@ class LinuxCloud(BaseCloud):
 
     def run_trainer(self):
         config=self.config.cloud
+        # Track selected Torch/CUDA wheel choice to rewrite requirements-cuda.txt before runtime install
+        selected_index_url: str | None = None
+        selected_torch: str | None = None
+        selected_tv: str | None = None
         if self.can_reattach():
             self.__trail_detached_trainer()
             return
@@ -380,6 +384,7 @@ class LinuxCloud(BaseCloud):
             torch_ver_out = self.connection.run(f"{shlex.quote(venv_python)} -c \"import torch; print(getattr(torch,'__version__',''))\"", in_stream=False, warn=True, hide='both')
             installed_torch = (torch_ver_out.stdout or "").strip()
             idx_url_target, torch_target, tv_target = self._select_torch_wheels_for_driver(driver_version)
+            selected_index_url, selected_torch, selected_tv = idx_url_target, torch_target, tv_target
             need_realign = False
             if installed_torch:
                 # Expect a suffix like +cu128/+cu124; if absent or different, realign
@@ -417,6 +422,7 @@ class LinuxCloud(BaseCloud):
             result = self.connection.run(test_cuda, in_stream=False, warn=True, hide='both')
             if result.exited == 42:
                 index_url, torch_ver, tv_ver = self._select_torch_wheels_for_driver(driver_version)
+                selected_index_url, selected_torch, selected_tv = index_url, torch_ver, tv_ver
                 print(f"CUDA preflight failed (driver={driver_version}). Installing Torch {torch_ver} / torchvision {tv_ver} from {index_url}...")
                 uninstall = (
                     f"{shlex.quote(venv_pip)} uninstall -y torch torchvision triton "
@@ -444,6 +450,7 @@ class LinuxCloud(BaseCloud):
                             break
                     next_idx = min(chosen_idx + 1, len(self._cuda_thresholds) - 1)
                     _, index_url2, torch_ver2, tv_ver2 = self._cuda_thresholds[next_idx]
+                    selected_index_url, selected_torch, selected_tv = index_url2, torch_ver2, tv_ver2
                     print(f"CUDA still failing; trying next-older Torch {torch_ver2} / {tv_ver2}.")
                     self.connection.run(uninstall, in_stream=False, warn=True)
                     install2 = (
@@ -478,7 +485,23 @@ class LinuxCloud(BaseCloud):
         # Ensure prepare_runtime_environment installs dependencies properly
         # by unsetting OT_LAZY_UPDATES, which would otherwise skip dependency checks
         # Also force-sync repo to latest master on the pod to ensure runtime fixes are applied.
-        cmd+=f' && cd {shlex.quote(config.onetrainer_dir)} && git fetch --all --prune && git reset --hard origin/master && unset OT_LAZY_UPDATES'
+        cmd+=f' && cd {shlex.quote(config.onetrainer_dir)} && git fetch --all --prune && git reset --hard origin/master'
+        # Rewrite requirements-cuda.txt with the driver-compatible Torch/CUDA tag to avoid reinstalling the wrong wheels
+        if selected_index_url and selected_torch and selected_tv:
+            safe_idx = shlex.quote(selected_index_url)
+            safe_torch = shlex.quote(selected_torch)
+            safe_tv = shlex.quote(selected_tv)
+            # Use POSIX-compliant sed invocations
+            cmd+=(
+                " && sed -i "
+                f"'s|^--extra-index-url .*|--extra-index-url {selected_index_url}|' requirements-cuda.txt"
+                " && sed -i "
+                f"'s|^torch==.*|torch=={selected_torch}|' requirements-cuda.txt"
+                " && sed -i "
+                f"'s|^torchvision==.*|torchvision=={selected_tv}|' requirements-cuda.txt"
+            )
+        # Finally, unset lazy updates to force prepare_runtime_environment to (re)install with the corrected requirements
+        cmd+=" && unset OT_LAZY_UPDATES"
         # Ensure accelerate is available in the venv (some base images may have stale envs)
         venv_python = f"{config.onetrainer_dir}/venv/bin/python"
         venv_pip = f"{config.onetrainer_dir}/venv/bin/pip"
