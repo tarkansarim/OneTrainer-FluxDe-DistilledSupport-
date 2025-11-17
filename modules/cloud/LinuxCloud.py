@@ -498,7 +498,7 @@ class LinuxCloud(BaseCloud):
         venv_pip = f"{config.onetrainer_dir}/venv/bin/pip"
         cmd += f" && ({shlex.quote(venv_python)} -c 'import accelerate' || {shlex.quote(venv_pip)} install --upgrade --no-cache-dir accelerate==1.7.0)"
 
-        cmd += f' && {config.onetrainer_dir}/run-cmd.sh train_remote --config-path={shlex.quote(self.config_file)} ' \
+        cmd += f' && OT_SKIP_PREFLIGHT=1 {config.onetrainer_dir}/run-cmd.sh train_remote --config-path={shlex.quote(self.config_file)} ' \
                f'--callback-path={shlex.quote(self.callback_file)} ' \
                f'--command-path={shlex.quote(self.command_pipe)}'
 
