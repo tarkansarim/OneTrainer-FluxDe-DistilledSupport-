@@ -3,6 +3,8 @@ from util.import_util import script_imports
 script_imports()
 
 import json
+import re
+from json import JSONDecodeError
 import os
 import pickle
 import threading
@@ -42,6 +44,32 @@ def write_request(filename,name, *params):
 def close_pipe(filename):
     with open(filename, 'wb'): #send EOF by closing
         os.remove(filename)
+
+def _load_relaxed_json(path: str) -> dict:
+	"""
+	Load a JSON config, but be tolerant of common JSONC artifacts (comments, trailing commas).
+	1) Try strict JSON
+	2) Try YAML (supports comments)
+	3) Strip simple trailing commas and retry JSON
+	"""
+	with open(path, "r", encoding="utf-8") as f:
+		text = f.read()
+	# 1) strict JSON
+	try:
+		return json.loads(text)
+	except JSONDecodeError:
+		pass
+	# 2) YAML fallback
+	try:
+		import yaml  # PyYAML is in requirements-global
+		loaded = yaml.safe_load(text)
+		if isinstance(loaded, dict):
+			return loaded
+	except Exception:
+		pass
+	# 3) strip trivial trailing commas
+	no_trailing = re.sub(r",\\s*(\\}|\\])", r"\\1", text)
+	return json.loads(no_trailing)
 
 def _cuda_preflight() -> bool:
 	"""
@@ -94,8 +122,7 @@ def main():
     commands = TrainCommands()
 
     train_config = TrainConfig.default_values()
-    with open(args.config_path, "r") as f:
-        train_config.from_dict(json.load(f))
+    train_config.from_dict(_load_relaxed_json(args.config_path))
 
     os.environ["OT_REMOTE_SKIP_PATH_RESTORE"] = "1"
 
