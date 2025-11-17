@@ -115,8 +115,8 @@ def main():
             raise
 
     trainer = None
-    # Optional CUDA preflight: allow cloud runner to disable this for distributed/multi-GPU
-    if os.environ.get("OT_SKIP_PREFLIGHT", "0") != "1":
+    # Optional CUDA preflight: default to skip (cloud sets up CUDA); can force by setting OT_SKIP_PREFLIGHT=0
+    if os.environ.get("OT_SKIP_PREFLIGHT", "1") != "1":
         if not _cuda_preflight():
             raise SystemExit(42)
 
