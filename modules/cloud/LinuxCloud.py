@@ -372,6 +372,14 @@ class LinuxCloud(BaseCloud):
         selected_tv: str | None = None
         must_reinstall: bool = False
         cuda_ok: bool = True
+        # Derive CUDA_VISIBLE_DEVICES from training config if provided (e.g., "0,1")
+        visible_devices: str | None = None
+        try:
+            idxs = getattr(self.config, "device_indexes", "")
+            if isinstance(idxs, str) and idxs.strip():
+                visible_devices = idxs.strip()
+        except Exception:
+            visible_devices = None
         if self.can_reattach():
             self.__trail_detached_trainer()
             return
@@ -468,6 +476,8 @@ class LinuxCloud(BaseCloud):
               "&& export TORCH_SHOW_CPP_STACKTRACES=${TORCH_SHOW_CPP_STACKTRACES:-1} " \
               "&& export PIP_CACHE_DIR=${PIP_CACHE_DIR:-/workspace/pip_cache} " \
               "&& mkdir -p ${PIP_CACHE_DIR:-/workspace/pip_cache}"
+        if visible_devices:
+            cmd += f" && export CUDA_VISIBLE_DEVICES={shlex.quote(visible_devices)}"
 
         if self.config.secrets.huggingface_token != "":
             cmd += f" && export HF_TOKEN={self.config.secrets.huggingface_token}"
