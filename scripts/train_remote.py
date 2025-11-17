@@ -43,6 +43,26 @@ def close_pipe(filename):
     with open(filename, 'wb'): #send EOF by closing
         os.remove(filename)
 
+def _cuda_preflight() -> bool:
+	"""
+	Hardened CUDA preflight for remote runs.
+	Returns True if a tiny CUDA tensor can be allocated; otherwise False.
+	"""
+	try:
+		import torch
+		# Early checks
+		if not torch.cuda.is_available():
+			print("CUDA_INIT_FAIL: torch.cuda.is_available() is False")
+			return False
+		n = torch.cuda.device_count()
+		# Allocation test catches driver/runtime mismatches (e.g., error 803)
+		_ = torch.empty(1, device="cuda:0")
+		print(f"CUDA_PREFLIGHT_OK devices={n}")
+		return True
+	except Exception as e:
+		print("CUDA_INIT_FAIL:", e)
+		return False
+
 
 
 def command_thread_function(commands: TrainCommands,filename : str,stop_event):
@@ -94,6 +114,11 @@ def main():
         if args.secrets_path is not None:
             raise
 
+    trainer = None
+    # Fail fast if CUDA cannot initialize on the pod
+    if not _cuda_preflight():
+        raise SystemExit(42)
+
     trainer = create.create_trainer(train_config, callbacks, commands)
 
     if args.command_path:
@@ -102,8 +127,9 @@ def main():
         command_thread.start()
 
     try:
-        trainer.start()
-        trainer.train()
+        if trainer is not None:
+            trainer.start()
+            trainer.train()
 
     finally:
         if args.command_path:
@@ -111,7 +137,8 @@ def main():
             close_pipe(args.command_path)
             command_thread.join()
 
-        trainer.end()
+        if trainer is not None:
+            trainer.end()
 
 
 
