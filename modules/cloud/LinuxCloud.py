@@ -423,14 +423,14 @@ class LinuxCloud(BaseCloud):
                     f"torch=={torch_target} torchvision=={tv_target}"
                 )
                 self.connection.run(install, in_stream=False, warn=True)
+            # Robust CUDA preflight: require successful tiny CUDA tensor allocation
             test_cuda = (
                 f"{shlex.quote(venv_python)} -c "
                 "\"import sys; import torch; "
                 "try:\\n import torch.cuda as _c; n=_c.device_count(); "
-                "print(f'CUDA_DEVICES={n}'); "
-                "sys.exit(0 if n and n>0 else 42)\\n"
-                "except Exception as e:\\n "
-                " print('CUDA_INIT_FAIL:', e); sys.exit(42)\""
+                "dev='cuda:0'; _=torch.empty(1, device=dev); "
+                "print(f'CUDA_OK devices={n}'); sys.exit(0)\\n"
+                "except Exception as e:\\n print('CUDA_INIT_FAIL:', e); sys.exit(42)\""
             )
             result = self.connection.run(test_cuda, in_stream=False, warn=True, hide='both')
             if result.exited == 42:
