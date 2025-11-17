@@ -52,7 +52,13 @@ class MultiTrainer(BaseTrainer):
             callbacks = TrainCallbacks()
         rank = spawn_rank + 1
         config = TrainConfig.default_values().from_dict(config_dict)
-        device = torch.device(devices[rank]) if devices else torch.device(config.train_device, rank)
+        # When config.train_device already includes an index (e.g., "cuda:0"),
+        # avoid passing a second explicit index to torch.device(..., rank).
+        if devices:
+            device = torch.device(devices[rank])
+        else:
+            base_device_type = config.train_device.split(':', 1)[0]
+            device = torch.device(base_device_type, rank)
 
         #set timeout to 24 hours, because caching is only done on 1 GPU and can take a significant time for large datasets.
         #The other GPU processes have to wait without timing out:
@@ -92,12 +98,14 @@ class MultiTrainer(BaseTrainer):
     def train(self):
         config_dict = self.config.to_pack_dict(secrets=True)
 
-        devices = self.config.device_indexes.split(',')
-        if len(devices) == 1 and not devices[0]:
+        device_indexes = self.config.device_indexes.split(',')
+        if len(device_indexes) == 1 and not device_indexes[0]:
             devices = None
             world_size = torch.cuda.device_count()
         else:
-            devices = [torch.device(self.config.train_device, int(d)) for d in devices]
+            # Normalize base device type to avoid double-indexing (e.g., "cuda:0", 1)
+            base_device_type = self.config.train_device.split(':', 1)[0]
+            devices = [torch.device(base_device_type, int(d)) for d in device_indexes]
             world_size = len(devices)
 
         workers = torch.multiprocessing.spawn(MultiTrainer._train_process, args=(world_size, config_dict, devices), nprocs=world_size - 1, join=False)
