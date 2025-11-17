@@ -458,6 +458,7 @@ class LinuxCloud(BaseCloud):
         cmd = "export PATH=$PATH:/usr/local/cuda/bin:/venv/main/bin " \
               "&& export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/usr/local/cuda/lib64:/usr/local/cuda/compat:/usr/lib/x86_64-linux-gnu " \
               "&& export OT_DISABLE_ZLUDA=1 " \
+              "&& export OT_SKIP_PREFLIGHT=1 " \
               "&& export PYTHONUNBUFFERED=1 " \
               "&& export CUDA_LAUNCH_BLOCKING=${CUDA_LAUNCH_BLOCKING:-1} " \
               "&& export NCCL_DEBUG=${NCCL_DEBUG:-INFO} " \

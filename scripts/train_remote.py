@@ -115,9 +115,10 @@ def main():
             raise
 
     trainer = None
-    # Fail fast if CUDA cannot initialize on the pod
-    if not _cuda_preflight():
-        raise SystemExit(42)
+    # Optional CUDA preflight: allow cloud runner to disable this for distributed/multi-GPU
+    if os.environ.get("OT_SKIP_PREFLIGHT", "0") != "1":
+        if not _cuda_preflight():
+            raise SystemExit(42)
 
     trainer = create.create_trainer(train_config, callbacks, commands)
 
