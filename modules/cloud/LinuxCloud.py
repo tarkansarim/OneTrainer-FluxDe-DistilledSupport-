@@ -376,7 +376,7 @@ class LinuxCloud(BaseCloud):
             self.__trail_detached_trainer()
             return
 
-        # Last-minute CUDA compatibility preflight: select a single Torch/CUDA build based on driver version.
+        # Last-minute CUDA compatibility preflight: only realign Torch/CUDA if CUDA init fails.
         try:
             venv_python = f"{config.onetrainer_dir}/venv/bin/python"
             venv_pip = f"{config.onetrainer_dir}/venv/bin/pip"
@@ -387,42 +387,6 @@ class LinuxCloud(BaseCloud):
                 hide='both',
             )
             driver_version = (drv.stdout or "").strip()
-            # Compare installed Torch CUDA tag to what the driver supports; realign if mismatched
-            torch_ver_out = self.connection.run(
-                f"{shlex.quote(venv_python)} -c \"import torch; print(getattr(torch,'__version__',''))\"",
-                in_stream=False,
-                warn=True,
-                hide='both',
-            )
-            installed_torch = (torch_ver_out.stdout or "").strip()
-            idx_url_target, torch_target, tv_target = self._select_torch_wheels_for_driver(driver_version)
-            selected_index_url, selected_torch, selected_tv = idx_url_target, torch_target, tv_target
-            need_realign = False
-            if installed_torch:
-                # Expect a suffix like +cu128/+cu124; if absent or different, realign
-                if "+cu" not in installed_torch:
-                    need_realign = True
-                elif f"+{torch_target.split('+')[-1]}" not in installed_torch:
-                    need_realign = True
-            else:
-                need_realign = True
-            if need_realign:
-                print(f"Adjusting Torch for driver {driver_version}: installing {torch_target}/{tv_target} from {idx_url_target}")
-                must_reinstall = True
-                uninstall = (
-                    f"{shlex.quote(venv_pip)} uninstall -y torch torchvision triton "
-                    "nvidia-cuda-nvrtc-cu12 nvidia-cuda-runtime-cu12 nvidia-cuda-cupti-cu12 "
-                    "nvidia-cudnn-cu12 nvidia-cublas-cu12 nvidia-cufft-cu12 nvidia-curand-cu12 "
-                    "nvidia-cusolver-cu12 nvidia-cusparse-cu12 nvidia-cusparselt-cu12 "
-                    "nvidia-nccl-cu12 nvidia-nvtx-cu12 nvidia-nvjitlink-cu12 nvidia-cufile-cu12"
-                )
-                self.connection.run(uninstall, in_stream=False, warn=True)
-                install = (
-                    f"{shlex.quote(venv_pip)} install --upgrade --force-reinstall --no-cache-dir "
-                    f"--index-url {shlex.quote(idx_url_target)} "
-                    f"torch=={torch_target} torchvision=={tv_target}"
-                )
-                self.connection.run(install, in_stream=False, warn=True)
             # Robust CUDA preflight: require successful tiny CUDA tensor allocation
             test_cuda = (
                 f"{shlex.quote(venv_python)} -c "
@@ -434,9 +398,9 @@ class LinuxCloud(BaseCloud):
             )
             result = self.connection.run(test_cuda, in_stream=False, warn=True, hide='both')
             if result.exited == 42:
-                index_url, torch_ver, tv_ver = self._select_torch_wheels_for_driver(driver_version)
-                selected_index_url, selected_torch, selected_tv = index_url, torch_ver, tv_ver
-                print(f"CUDA preflight failed (driver={driver_version}). Installing Torch {torch_ver} / torchvision {tv_ver} from {index_url}...")
+                idx_url_target, torch_target, tv_target = self._select_torch_wheels_for_driver(driver_version)
+                selected_index_url, selected_torch, selected_tv = idx_url_target, torch_target, tv_target
+                print(f"CUDA preflight failed (driver={driver_version}). Installing Torch {torch_target} / torchvision {tv_target} from {idx_url_target}...")
                 must_reinstall = True
                 uninstall = (
                     f"{shlex.quote(venv_pip)} uninstall -y torch torchvision triton "
@@ -447,8 +411,8 @@ class LinuxCloud(BaseCloud):
                 )
                 install = (
                     f"{shlex.quote(venv_pip)} install --upgrade --force-reinstall --no-cache-dir "
-                    f"--index-url {shlex.quote(index_url)} "
-                    f"torch=={torch_ver} torchvision=={tv_ver}"
+                    f"--index-url {shlex.quote(idx_url_target)} "
+                    f"torch=={torch_target} torchvision=={tv_target}"
                 )
                 self.connection.run(uninstall, in_stream=False, warn=True)
                 self.connection.run(install, in_stream=False, warn=True)
