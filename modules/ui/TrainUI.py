@@ -803,11 +803,17 @@ class TrainUI(ctk.CTk):
             )
 
             try:
-                ollama_manager.prepare(
-                    train_config.train_device,
-                    getattr(train_config, "device_indexes", ""),
-                    bool(getattr(train_config, "multi_gpu", False)),
-                )
+                # If cloud training is enabled, do not bind local Ollama to cloud's device settings.
+                # Cloud settings (device_indexes, multi_gpu) are for the remote trainer.
+                if train_config.cloud.enabled:
+                    # Use default local settings (single GPU or CPU if needed, or just first available)
+                    ollama_manager.prepare("cuda", "", False)
+                else:
+                    ollama_manager.prepare(
+                        train_config.train_device,
+                        getattr(train_config, "device_indexes", ""),
+                        bool(getattr(train_config, "multi_gpu", False)),
+                    )
             except Exception as exc:
                 traceback.print_exc()
                 self.on_update_status(f"Warning: failed to restart Ollama with training GPU ({exc})")
