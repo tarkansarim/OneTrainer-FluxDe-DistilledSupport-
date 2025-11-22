@@ -803,11 +803,14 @@ class TrainUI(ctk.CTk):
             )
 
             try:
-                # If cloud training is enabled, do not bind local Ollama to cloud's device settings.
-                # Cloud settings (device_indexes, multi_gpu) are for the remote trainer.
+                # If cloud training is enabled, use the cloud tab's device settings for consistency,
+                # effectively ignoring the General tab's settings which are for local training.
                 if train_config.cloud.enabled:
-                    # Use default local settings (single GPU or CPU if needed, or just first available)
-                    ollama_manager.prepare("cuda", "", False)
+                    ollama_manager.prepare(
+                        "cuda", # Cloud training always assumes CUDA/NVIDIA environment
+                        getattr(train_config.cloud, "device_indexes", ""),
+                        bool(getattr(train_config.cloud, "multi_gpu", False)),
+                    )
                 else:
                     ollama_manager.prepare(
                         train_config.train_device,
