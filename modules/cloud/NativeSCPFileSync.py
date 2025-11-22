@@ -13,6 +13,15 @@ class NativeSCPFileSync(BaseSSHFileSync):
                 "-P", str(secrets.port),
                 "-o", "StrictHostKeyChecking=no",
             ]
+        
+        # Add identity file if one was found by BaseSSHFileSync
+        if hasattr(self, "connect_kwargs") and "key_filename" in self.connect_kwargs:
+            keys = self.connect_kwargs["key_filename"]
+            if keys:
+                # scp -i takes a single key, use the first one found
+                # If keys is a list, take first item
+                key_path = keys[0] if isinstance(keys, list) else keys
+                self.base_args.extend(["-i", str(key_path)])
 
     def __upload_batch(self,local_files,remote_dir : Path):
         args=self.base_args.copy()
