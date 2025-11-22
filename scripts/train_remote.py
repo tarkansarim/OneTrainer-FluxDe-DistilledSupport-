@@ -15,6 +15,7 @@ from contextlib import suppress
 os.environ["OT_DISABLE_ZLUDA"] = "1"
 
 from modules.util import create
+from modules.util import ollama_manager
 # As an extra safeguard, ensure any ZLUDA device probing is a no-op on remote.
 try:
     from modules.zluda import ZLUDA as _ZLUDA
@@ -148,6 +149,16 @@ def main():
             raise SystemExit(42)
 
     trainer = create.create_trainer(train_config, callbacks, commands)
+
+    # Start Ollama on remote if needed (using cloud-adjusted config)
+    try:
+        ollama_manager.prepare(
+            train_config.train_device,
+            getattr(train_config, "device_indexes", ""),
+            bool(getattr(train_config, "multi_gpu", False)),
+        )
+    except Exception as exc:
+        print(f"Warning: failed to start Ollama on remote ({exc})")
 
     if args.command_path:
         stop_event=threading.Event()
