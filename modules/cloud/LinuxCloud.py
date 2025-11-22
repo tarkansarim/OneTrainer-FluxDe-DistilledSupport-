@@ -92,13 +92,27 @@ class LinuxCloud(BaseCloud):
             raise ValueError('Host and port required for SSH connection')
 
         try:
-            self.connection=fabric.Connection(host=secrets.host,port=secrets.port,user=secrets.user)
+            # Explicitly look for SSH keys in standard location to help Paramiko on Windows
+            connect_kwargs = {}
+            key_files = []
+            ssh_dir = Path.home() / ".ssh"
+            if ssh_dir.exists():
+                # Check for common key names
+                for key_name in ["id_rsa", "id_ed25519", "id_ecdsa", "id_dsa"]:
+                    key_path = ssh_dir / key_name
+                    if key_path.exists():
+                        key_files.append(str(key_path))
+            
+            if key_files:
+                connect_kwargs["key_filename"] = key_files
+
+            self.connection=fabric.Connection(host=secrets.host,port=secrets.port,user=secrets.user, connect_kwargs=connect_kwargs)
             self.connection.open()
             self.connection.transport.set_keepalive(30)
 
-            self.callback_connection=fabric.Connection(host=secrets.host,port=secrets.port,user=secrets.user)
+            self.callback_connection=fabric.Connection(host=secrets.host,port=secrets.port,user=secrets.user, connect_kwargs=connect_kwargs)
 
-            self.command_connection=fabric.Connection(host=secrets.host,port=secrets.port,user=secrets.user)
+            self.command_connection=fabric.Connection(host=secrets.host,port=secrets.port,user=secrets.user, connect_kwargs=connect_kwargs)
             #the command connection isn't used for long periods of time; prevent remote from closing it:
             self.command_connection.open()
             self.command_connection.transport.set_keepalive(30)
@@ -111,12 +125,23 @@ class LinuxCloud(BaseCloud):
 
             self._notify_connection_update()
 
-        except Exception:
+        except Exception as e:
             if self.connection:
                 self.connection.close()
                 self.connection=None
             if self.command_connection:
                 self.command_connection.close()
+            
+            if "Authentication failed" in str(e):
+                print(f"\nSSH Authentication failed.")
+                if key_files:
+                    print(f"Attempted to use keys: {key_files}")
+                else:
+                    print("No SSH keys found in standard locations (~/.ssh/).")
+                print("Please ensure you have:")
+                print("1. Created an SSH key pair (e.g. 'ssh-keygen -t ed25519')")
+                print("2. Added the public key to your RunPod account settings")
+                print("3. The private key is in your user home .ssh directory")
             raise
 
 

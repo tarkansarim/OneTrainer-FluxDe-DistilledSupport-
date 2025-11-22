@@ -16,7 +16,21 @@ import fabric
 class BaseSSHFileSync(BaseFileSync):
     def __init__(self, config: CloudConfig, secrets: CloudSecretsConfig):
         super().__init__(config, secrets)
-        self.sync_connection=fabric.Connection(host=secrets.host,port=secrets.port,user=secrets.user)
+        
+        connect_kwargs = {}
+        key_files = []
+        ssh_dir = Path.home() / ".ssh"
+        if ssh_dir.exists():
+            for key_name in ["id_rsa", "id_ed25519", "id_ecdsa", "id_dsa"]:
+                key_path = ssh_dir / key_name
+                if key_path.exists():
+                    key_files.append(str(key_path))
+        
+        if key_files:
+            connect_kwargs["key_filename"] = key_files
+
+        self.connect_kwargs = connect_kwargs
+        self.sync_connection=fabric.Connection(host=secrets.host,port=secrets.port,user=secrets.user, connect_kwargs=connect_kwargs)
 
     def close(self):
         if self.sync_connection:
