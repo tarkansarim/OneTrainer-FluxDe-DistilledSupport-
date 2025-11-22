@@ -105,6 +105,8 @@ class LinuxCloud(BaseCloud):
             
             if key_files:
                 connect_kwargs["key_filename"] = key_files
+                # Allow fallback to other auth methods if key fails
+                connect_kwargs["look_for_keys"] = False
 
             self.connection=fabric.Connection(host=secrets.host,port=secrets.port,user=secrets.user, connect_kwargs=connect_kwargs)
             self.connection.open()

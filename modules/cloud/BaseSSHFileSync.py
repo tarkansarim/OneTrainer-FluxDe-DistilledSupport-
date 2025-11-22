@@ -28,6 +28,8 @@ class BaseSSHFileSync(BaseFileSync):
         
         if key_files:
             connect_kwargs["key_filename"] = key_files
+            # Allow fallback if key fails
+            connect_kwargs["look_for_keys"] = False
 
         self.connect_kwargs = connect_kwargs
         self.sync_connection=fabric.Connection(host=secrets.host,port=secrets.port,user=secrets.user, connect_kwargs=connect_kwargs)
