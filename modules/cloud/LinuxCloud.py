@@ -96,17 +96,38 @@ class LinuxCloud(BaseCloud):
             connect_kwargs = {}
             key_files = []
             ssh_dir = Path.home() / ".ssh"
+            
             if ssh_dir.exists():
-                # Check for common key names
-                for key_name in ["id_rsa", "id_ed25519", "id_ecdsa", "id_dsa"]:
-                    key_path = ssh_dir / key_name
-                    if key_path.exists():
-                        key_files.append(str(key_path))
+                # If key_comment is provided, look for matching keys first
+                comment_match_key = None
+                if secrets.key_comment:
+                    for pub_key_path in ssh_dir.glob("*.pub"):
+                        try:
+                            content = pub_key_path.read_text(encoding="utf-8").strip()
+                            # SSH public key format: type key comment
+                            parts = content.split(" ", 2)
+                            if len(parts) >= 3 and secrets.key_comment in parts[2]:
+                                # Found a match! Use the corresponding private key (without .pub)
+                                priv_key_path = pub_key_path.with_suffix("")
+                                if priv_key_path.exists():
+                                    comment_match_key = str(priv_key_path)
+                                    break
+                        except Exception:
+                            pass
+                
+                if comment_match_key:
+                    key_files.append(comment_match_key)
+                    print(f"Found SSH key matching '{secrets.key_comment}': {comment_match_key}")
+                
+                # Fallback to standard keys if no specific match found
+                if not key_files:
+                    for key_name in ["id_rsa", "id_ed25519", "id_ecdsa", "id_dsa"]:
+                        key_path = ssh_dir / key_name
+                        if key_path.exists():
+                            key_files.append(str(key_path))
             
             if key_files:
                 connect_kwargs["key_filename"] = key_files
-                # Allow fallback to other auth methods if key fails
-                connect_kwargs["look_for_keys"] = False
 
             self.connection=fabric.Connection(host=secrets.host,port=secrets.port,user=secrets.user, connect_kwargs=connect_kwargs)
             self.connection.open()

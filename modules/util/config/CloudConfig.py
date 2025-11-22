@@ -12,6 +12,7 @@ class CloudSecretsConfig(BaseConfig):
     port: int
     user: str
     id: str
+    key_comment: str
 
     def __init__(self, data: list[(str, Any, type, bool)]):
         super().__init__(data)
@@ -25,6 +26,7 @@ class CloudSecretsConfig(BaseConfig):
         data.append(("host", "", str, False))
         data.append(("port", 0, str, False))
         data.append(("user", "root", str, False))
+        data.append(("key_comment", "", str, False))
         return CloudSecretsConfig(data)
 
 
