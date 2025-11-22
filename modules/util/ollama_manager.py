@@ -42,8 +42,13 @@ def prepare(train_device: str, device_indexes: str, multi_gpu: bool):
         _kill_ollama_processes_windows() if system == "windows" else _kill_ollama_processes_posix()
 
         env = os.environ.copy()
-        env["CUDA_VISIBLE_DEVICES"] = device_index
-        print(f"[Ollama] Restarting ollama serve with CUDA_VISIBLE_DEVICES={env['CUDA_VISIBLE_DEVICES']}")
+        if device_index == "ALL":
+            # "ALL" implies no restriction on CUDA devices
+            env.pop("CUDA_VISIBLE_DEVICES", None)
+            print("[Ollama] Restarting ollama serve with CUDA_VISIBLE_DEVICES=(All)")
+        else:
+            env["CUDA_VISIBLE_DEVICES"] = device_index
+            print(f"[Ollama] Restarting ollama serve with CUDA_VISIBLE_DEVICES={env['CUDA_VISIBLE_DEVICES']}")
         _state.last_device_index = device_index
         _state.last_env = env
         _launch_ollama_process(env)
@@ -99,6 +104,12 @@ def _select_device(train_device: Optional[str], device_indexes: str, multi_gpu: 
         if len(indexes) > 1:
             return ",".join(indexes)
         return indexes[0]
+    
+    # If multi_gpu is True but no specific indexes are provided, it implies ALL GPUs.
+    # We return a sentinel "ALL" to handle this in prepare().
+    if multi_gpu:
+        return "ALL"
+
     if train_device:
         device = train_device.strip().lower()
         if device.startswith("cuda"):
