@@ -803,12 +803,27 @@ class TrainUI(ctk.CTk):
             )
 
             try:
-                # If cloud training is enabled, use the cloud tab's device settings for consistency,
-                # effectively ignoring the General tab's settings which are for local training.
+                # If cloud training is enabled, use the cloud tab's device settings for local Ollama restart.
+                # This ensures the log message reflects the intended cloud configuration (e.g. multi-GPU).
                 if train_config.cloud.enabled:
+                    # Fetch cloud-specific multi-gpu settings
+                    # Note: train_config.cloud.device_indexes might be empty string for "all"
+                    # train_config.cloud.multi_gpu is boolean
+                    
+                    cloud_device_indexes = getattr(train_config.cloud, "device_indexes", "")
+                    
+                    # If cloud.multi_gpu is enabled but no indexes specified, we want to imply "All".
+                    # However, ollama_manager.prepare expects exact indexes or it defaults to 0.
+                    # If device_indexes is empty here, we should probably generate a string "0,1,2..." 
+                    # based on cloud.gpu_count to make the log look correct, 
+                    # OR trust our update to ollama_manager to handle empty+multi_gpu as "ALL".
+                    
+                    # Since we updated ollama_manager to handle (multi_gpu=True, indexes="") as "ALL",
+                    # we just pass the cloud config values directly.
+                    
                     ollama_manager.prepare(
-                        "cuda", # Cloud training always assumes CUDA/NVIDIA environment
-                        getattr(train_config.cloud, "device_indexes", ""),
+                        "cuda", 
+                        cloud_device_indexes,
                         bool(getattr(train_config.cloud, "multi_gpu", False)),
                     )
                 else:
