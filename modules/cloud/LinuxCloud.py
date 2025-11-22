@@ -512,7 +512,7 @@ class LinuxCloud(BaseCloud):
         self._verify_mgds_import(config.onetrainer_dir)
 
         cmd = "export PATH=$PATH:/usr/local/cuda/bin:/venv/main/bin " \
-              "&& export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/usr/local/cuda/lib64:/usr/local/cuda/compat:/usr/lib/x86_64-linux-gnu " \
+              "&& export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/usr/local/cuda/lib64:/usr/lib/x86_64-linux-gnu " \
               "&& export OT_DISABLE_ZLUDA=1 " \
               "&& export OT_SKIP_PREFLIGHT=1 " \
               "&& export PYTHONUNBUFFERED=1 " \
