@@ -119,52 +119,84 @@ class CropCaptionGenerator(PipelineModule, RandomAccessPipelineModule):
                 concept0 = self._get_previous_item(variation, self.concept_name, 0)
                 detail_cfg = DetailCropGenerator._extract_detail_config(concept0)
                 if detail_cfg.get('enable_captioning', False) and detail_cfg.get('caption_probability', 0.0) > 0.0:
-                    # In multi-GPU runs, perform pre-generation once on master.
-                    # Other ranks will read from the shared cache folder to avoid duplicated work.
-                    if world_size > 1 and not is_master:
+                    # Distributed Captioning Implementation
+                    # Each rank starts its own Ollama server and processes its own share of the crops.
+                    # This allows fully utilizing all GPUs for caption generation.
+                    
+                    # Determine my share of the workload
+                    my_shard_indices = [i for i in range(total) if i % world_size == rank]
+                    
+                    if not my_shard_indices:
+                        # No work for this rank, mark complete and return
                         self._pregeneration_complete = True
                         return
 
                     prob_pct = int(detail_cfg.get('caption_probability', 0.0) * 100)
-                    print(f"[Detail Captions] Generating captions for epoch {variation} (~{prob_pct}% of {total} crops)...")
+                    print(f"[Detail Captions] Rank {rank}/{world_size} generating captions for epoch {variation} (~{prob_pct}% of {len(my_shard_indices)} crops)...")
                     sys.stdout.flush()
 
+                    # Start per-rank Ollama instance
+                    # Use a unique port per rank to avoid collisions (default 11434, 11435, etc)
+                    my_port = 11434 + rank
+                    # Use only THIS rank's GPU index if we are in a distributed setting
+                    # Assuming 'rank' maps 1:1 to visible device index in standard DDP
+                    my_device_index = str(rank) 
+                    
+                    # If we are running locally single-gpu, rank is 0, device is whatever was passed or default.
+                    # But if world_size > 1, we enforce strict binding.
+                    
+                    # Note: We must ensure we don't conflict with the global 'ollama_manager' state 
+                    # if multiple threads were sharing it, but here we are in separate processes (DDP).
+                    # Each process has its own 'ollama_manager' module instance.
+                    
                     with suppress(Exception):
-                        ollama_manager.ensure_running()
-                    # Ensure model exists locally (may take time on first run)
+                        ollama_manager.prepare(
+                            train_device="cuda",
+                            device_indexes=my_device_index,
+                            multi_gpu=False, # Treat as single-GPU instance for this specific server
+                            port=my_port
+                        )
+
+                    # Ensure model exists locally on this rank's server
+                    my_endpoint = f"http://localhost:{my_port}"
+                    # Override the config endpoint for this session to force using our private server
+                    # We cheat a bit by mutating the dict for this method scope, or passing it explicitly
+                    
+                    # We need to update detail_cfg to point to our private port for _request_caption calls
+                    detail_cfg['caption_endpoint'] = my_endpoint
+
                     with suppress(Exception):
                         self._ensure_model_available(
                             detail_cfg.get('caption_model') or "qwen2.5vl:3b",
-                            detail_cfg.get('caption_endpoint') or "http://localhost:11434",
+                            my_endpoint,
                             float(detail_cfg.get('caption_timeout', 120.0) or 120.0),
                         )
 
-                    # Pre-generate captions for all items
+                    # Pre-generate captions for MY shard items
                     caption_out_name = f"{self.prompt_name}_caption" if hasattr(self, 'prompt_name') else "prompt_caption"
                     
                     # Helper function for generating a single caption
                     def _generate_one(idx):
                         try:
+                            # get_item calls _request_caption, which uses detail_cfg['caption_endpoint']
                             self.get_item(variation, idx, caption_out_name)
                         except Exception as e:
-                            print(f"[Detail Captions] Error pre-generating caption for item {idx}: {e}")
+                            print(f"[Detail Captions] Rank {rank} error pre-generating caption for item {idx}: {e}")
                             sys.stdout.flush()
 
+                    # Even within a rank, we can use threads if we want concurrency against our private server
                     if self.parallel_workers > 1:
                         from concurrent.futures import ThreadPoolExecutor, as_completed
-                        # Use ThreadPoolExecutor for parallel captioning
-                        print(f"[Detail Captions] Using {self.parallel_workers} parallel workers")
+                        print(f"[Detail Captions] Rank {rank} using {self.parallel_workers} parallel workers")
                         with ThreadPoolExecutor(max_workers=self.parallel_workers) as executor:
-                            futures = [executor.submit(_generate_one, i) for i in range(total)]
+                            futures = [executor.submit(_generate_one, i) for i in my_shard_indices]
                             for future in as_completed(futures):
-                                # Just consuming results to ensure exceptions are caught or logged if needed
                                 pass
                     else:
-                        # Sequential generation
-                        for index in range(total):
+                        for index in my_shard_indices:
                             _generate_one(index)
 
-                    print(f"[Detail Captions] Pre-generation complete. Metrics: {self._metrics}")
+                    print(f"[Detail Captions] Rank {rank} pre-generation complete. Metrics: {self._metrics}")
                     sys.stdout.flush()
                     self._pregeneration_complete = True
         except Exception as e:

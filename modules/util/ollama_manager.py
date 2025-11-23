@@ -16,18 +16,20 @@ class _State:
     prepared: bool = False
     last_device_index: Optional[str] = None
     last_env: Optional[dict[str, str]] = None
+    port: int = 11434
 
 
 _state = _State()
 
 
-def prepare(train_device: str, device_indexes: str, multi_gpu: bool):
+def prepare(train_device: str, device_indexes: str, multi_gpu: bool, port: int = 11434):
     """Restart Ollama bound to the training GPU before training starts."""
-    if _state.prepared:
+    if _state.prepared and _state.port == port:
         return
 
     system = platform.system().lower()
     device_index = _select_device(train_device, device_indexes, multi_gpu)
+    # Force re-prepare if port changed or not prepared
     if device_index is None:
         return
 
@@ -36,29 +38,33 @@ def prepare(train_device: str, device_indexes: str, multi_gpu: bool):
             _state.service_was_running = _stop_windows_service()
             _kill_ollama_processes_windows()
         else:
-            _kill_ollama_processes_posix()
-
-        # Ensure no other Ollama servers are running that might block the port
-        _kill_ollama_processes_windows() if system == "windows" else _kill_ollama_processes_posix()
+            # On remote/linux with multiple ranks, we don't want to kill other ranks' ollama processes
+            # Only kill if we are taking over the default port or cleaning up?
+            # For distributed captioning, each rank manages its own process.
+            # Killing 'ollama' blindly by name will kill everyone's server!
+            # We should rely on Popen to manage our specific child process.
+            # However, if there's a zombie process on our port, we might fail to bind.
+            # For now, we skip global kill on linux if using non-default port? 
+            # Or trust that train_remote isolates environments? No, same pod.
+            pass 
 
         env = os.environ.copy()
+        env["OLLAMA_HOST"] = f"127.0.0.1:{port}"
+        
         if device_index == "ALL":
-            # "ALL" implies no restriction on CUDA devices
             env.pop("CUDA_VISIBLE_DEVICES", None)
-            print("[Ollama] Restarting ollama serve with CUDA_VISIBLE_DEVICES=(All)")
+            print(f"[Ollama] Starting ollama serve on port {port} with CUDA_VISIBLE_DEVICES=(All)")
         else:
             env["CUDA_VISIBLE_DEVICES"] = device_index
-            print(f"[Ollama] Restarting ollama serve with CUDA_VISIBLE_DEVICES={env['CUDA_VISIBLE_DEVICES']}")
+            print(f"[Ollama] Starting ollama serve on port {port} with CUDA_VISIBLE_DEVICES={env['CUDA_VISIBLE_DEVICES']}")
         
-        # Set OLLAMA_NUM_PARALLEL if provided via env var from caller, or default
-        # This allows parallel captioning workers to actually run in parallel
         if "OLLAMA_NUM_PARALLEL" not in env:
-            # Default to 4 if not specified, to allow some parallelism by default
             env["OLLAMA_NUM_PARALLEL"] = "4"
             
         _state.last_device_index = device_index
         _state.last_env = env
-        _launch_ollama_process(env)
+        _state.port = port
+        _launch_ollama_process(env, port)
         _state.prepared = True
     except FileNotFoundError:
         _state.managed_process = None
@@ -202,12 +208,12 @@ def _kill_ollama_processes_posix():
     subprocess.run(["pkill", "-f", "ollama"], check=False, capture_output=True)
 
 
-def _wait_for_server(timeout: float = 60.0):
-    url = "http://127.0.0.1:11434/api/tags"
+def _wait_for_server(port: int = 11434, timeout: float = 60.0):
+    url = f"http://127.0.0.1:{port}/api/tags"
     deadline = time.time() + timeout
     while time.time() < deadline:
         if _state.managed_process and _state.managed_process.poll() is not None:
-            raise RuntimeError("Ollama process exited unexpectedly during startup")
+            raise RuntimeError(f"Ollama process exited unexpectedly during startup on port {port}")
         try:
             response = requests.get(url, timeout=2.0)
             if response.status_code == 200:
@@ -215,10 +221,10 @@ def _wait_for_server(timeout: float = 60.0):
         except requests.exceptions.RequestException:
             pass
         time.sleep(1.0)
-    raise RuntimeError("Timed out waiting for Ollama server to become ready")
+    raise RuntimeError(f"Timed out waiting for Ollama server to become ready on port {port}")
 
 
-def _launch_ollama_process(env: dict[str, str]):
+def _launch_ollama_process(env: dict[str, str], port: int = 11434):
     creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
     _state.managed_process = subprocess.Popen(
         ["ollama", "serve"],
@@ -227,4 +233,4 @@ def _launch_ollama_process(env: dict[str, str]):
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
     )
-    _wait_for_server()
+    _wait_for_server(port)

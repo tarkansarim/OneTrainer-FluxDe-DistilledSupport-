@@ -150,15 +150,16 @@ def main():
 
     trainer = create.create_trainer(train_config, callbacks, commands)
 
-    # Start Ollama on remote if needed (using cloud-adjusted config)
-    try:
-        ollama_manager.prepare(
-            train_config.train_device,
-            getattr(train_config, "device_indexes", ""),
-            bool(getattr(train_config, "multi_gpu", False)),
-        )
-    except Exception as exc:
-        print(f"Warning: failed to start Ollama on remote ({exc})")
+    # Cleanup global Ollama start. Distributed captioning (per-rank) is handled by CropCaptionGenerator.
+    # The global prepare() call is no longer needed for the new architecture.
+    # try:
+    #     ollama_manager.prepare(
+    #         train_config.train_device,
+    #         getattr(train_config, "device_indexes", ""),
+    #         bool(getattr(train_config, "multi_gpu", False)),
+    #     )
+    # except Exception as exc:
+    #     print(f"Warning: failed to start Ollama on remote ({exc})")
 
     if args.command_path:
         stop_event=threading.Event()
