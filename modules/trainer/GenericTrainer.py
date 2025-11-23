@@ -808,10 +808,27 @@ class GenericTrainer(BaseTrainer):
         for _epoch in tqdm(epochs, desc="epoch") if multi.is_master() else epochs:
             self.callbacks.on_update_status("Starting epoch/caching")
 
-            #call start_next_epoch with only one process at first, because it might write to the cache. All subsequent processes can read in parallel:
-            for _ in multi.master_first():
+            #call start_next_epoch. For detail crops with distributed captioning, we want all ranks
+            # to execute simultaneously (not master-first), so we skip the sequential wrapper.
+            # master_first() is only needed if we're writing to shared latent cache, but crops/captions
+            # use sharding and separate files, so parallelism is safe.
+            # We detect this by checking if detail crops are enabled in the config.
+            use_parallel_start = False
+            try:
+                # Check if any concept has detail crops enabled
+                if hasattr(self.config, 'concepts') and self.config.concepts:
+                    for concept in self.config.concepts:
+                        if hasattr(concept, 'image') and hasattr(concept.image, 'detail_crops'):
+                            if getattr(concept.image.detail_crops, 'enabled', False):
+                                use_parallel_start = True
+                                break
+            except Exception:
+                pass
+            
+            if use_parallel_start and multi.world_size() > 1:
+                # Parallel execution for all ranks (detail crops + captions)
                 if self.config.latent_caching:
-                    print("[Trainer] Calling start_next_epoch() with latent_caching enabled...")
+                    print("[Trainer] Calling start_next_epoch() in PARALLEL mode with latent_caching enabled...")
                     sys.stdout.flush()
                     try:
                         self.data_loader.get_data_set().start_next_epoch()
@@ -826,10 +843,10 @@ class GenericTrainer(BaseTrainer):
                     print("[Trainer] setup_train_device() completed")
                     sys.stdout.flush()
                 else:
-                    print("[Trainer] Setting up train device first (no latent_caching)...")
+                    print("[Trainer] Setting up train device first (no latent_caching, PARALLEL mode)...")
                     sys.stdout.flush()
                     self.model_setup.setup_train_device(self.model, self.config)
-                    print("[Trainer] Calling start_next_epoch()...")
+                    print("[Trainer] Calling start_next_epoch() in PARALLEL mode...")
                     sys.stdout.flush()
                     try:
                         self.data_loader.get_data_set().start_next_epoch()
@@ -840,6 +857,39 @@ class GenericTrainer(BaseTrainer):
                         traceback.print_exc()
                         sys.stdout.flush()
                         raise
+            else:
+                # Standard master_first execution (sequential for safety when writing to shared cache)
+                for _ in multi.master_first():
+                    if self.config.latent_caching:
+                        print("[Trainer] Calling start_next_epoch() with latent_caching enabled...")
+                        sys.stdout.flush()
+                        try:
+                            self.data_loader.get_data_set().start_next_epoch()
+                            print("[Trainer] start_next_epoch() completed, setting up train device...")
+                            sys.stdout.flush()
+                        except Exception as e:
+                            print(f"[Trainer] ERROR in start_next_epoch(): {e}")
+                            traceback.print_exc()
+                            sys.stdout.flush()
+                            raise
+                        self.model_setup.setup_train_device(self.model, self.config)
+                        print("[Trainer] setup_train_device() completed")
+                        sys.stdout.flush()
+                    else:
+                        print("[Trainer] Setting up train device first (no latent_caching)...")
+                        sys.stdout.flush()
+                        self.model_setup.setup_train_device(self.model, self.config)
+                        print("[Trainer] Calling start_next_epoch()...")
+                        sys.stdout.flush()
+                        try:
+                            self.data_loader.get_data_set().start_next_epoch()
+                            print("[Trainer] start_next_epoch() completed")
+                            sys.stdout.flush()
+                        except Exception as e:
+                            print(f"[Trainer] ERROR in start_next_epoch(): {e}")
+                            traceback.print_exc()
+                            sys.stdout.flush()
+                            raise
 
             if self.config.debug_mode:
                 multi.warn_parameter_divergence(self.parameters, train_device)
