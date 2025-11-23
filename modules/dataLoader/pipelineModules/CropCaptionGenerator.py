@@ -200,6 +200,18 @@ class CropCaptionGenerator(PipelineModule, RandomAccessPipelineModule):
                     print(f"[Detail Captions] Rank {rank} pre-generation complete. Metrics: {self._metrics}")
                     sys.stdout.flush()
                     self._pregeneration_complete = True
+                    
+                    # Explicit barrier to ensure ALL ranks finish captioning before ANY rank proceeds to caching
+                    try:
+                        from modules.util import multi_gpu_util as _multi
+                        if int(getattr(_multi, "world_size")()) > 1:
+                            print(f"[Detail Captions] Rank {rank} waiting at barrier for other ranks to finish...")
+                            sys.stdout.flush()
+                            torch.distributed.barrier()
+                            print(f"[Detail Captions] Rank {rank} barrier released, all ranks finished captioning")
+                            sys.stdout.flush()
+                    except Exception:
+                        pass
         except Exception as e:
             # If captioning fails, we MUST crash immediately to prevent training with broken data.
             # Do NOT set _pregeneration_complete or suppress the error.
