@@ -806,7 +806,7 @@ class TrainUI(ctk.CTk):
                 # If cloud training is enabled, skip local Ollama restart entirely.
                 # The remote script (train_remote.py) handles starting Ollama on the cloud pod.
                 if not train_config.cloud.enabled:
-                ollama_manager.prepare(
+                    ollama_manager.prepare(
                     train_config.train_device,
                     getattr(train_config, "device_indexes", ""),
                     bool(getattr(train_config, "multi_gpu", False)),
