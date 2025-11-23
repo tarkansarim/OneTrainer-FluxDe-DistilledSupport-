@@ -119,86 +119,101 @@ class CropCaptionGenerator(PipelineModule, RandomAccessPipelineModule):
                 concept0 = self._get_previous_item(variation, self.concept_name, 0)
                 detail_cfg = DetailCropGenerator._extract_detail_config(concept0)
                 if detail_cfg.get('enable_captioning', False) and detail_cfg.get('caption_probability', 0.0) > 0.0:
-                    # Distributed Captioning Implementation
-                    # Each rank starts its own Ollama server and processes its own share of the crops.
-                    # This allows fully utilizing all GPUs for caption generation.
+                    is_windows = sys.platform == "win32"
                     
-                    # Determine my share of the workload
-                    my_shard_indices = [i for i in range(total) if i % world_size == rank]
-                    
-                    if not my_shard_indices:
-                        # No work for this rank, mark complete and return
-                        self._pregeneration_complete = True
-                        return
+                    # On Windows, distributed captioning with multiple local Ollama instances is unstable 
+                    # due to port binding and file locking issues. We force Master-Only generation on Windows.
+                    # On Linux (Cloud), we use full distributed per-rank captioning.
+                    use_distributed_captioning = (world_size > 1) and (not is_windows)
 
-                    prob_pct = int(detail_cfg.get('caption_probability', 0.0) * 100)
-                    print(f"[Detail Captions] Rank {rank}/{world_size} generating captions for epoch {variation} (~{prob_pct}% of {len(my_shard_indices)} crops)...")
-                    sys.stdout.flush()
+                    if use_distributed_captioning:
+                        # --- DISTRIBUTED (LINUX/CLOUD) ---
+                        # Each rank processes its own shard using its own private Ollama instance.
+                        
+                        # Determine my share of the workload
+                        my_shard_indices = [i for i in range(total) if i % world_size == rank]
+                        if not my_shard_indices:
+                            self._pregeneration_complete = True
+                            return
 
-                    # Start per-rank Ollama instance
-                    # Use a unique port per rank to avoid collisions (default 11434, 11435, etc)
-                    my_port = 11434 + rank
-                    # Use only THIS rank's GPU index if we are in a distributed setting
-                    # Assuming 'rank' maps 1:1 to visible device index in standard DDP
-                    my_device_index = str(rank) 
-                    
-                    # If we are running locally single-gpu, rank is 0, device is whatever was passed or default.
-                    # But if world_size > 1, we enforce strict binding.
-                    
-                    # Note: We must ensure we don't conflict with the global 'ollama_manager' state 
-                    # if multiple threads were sharing it, but here we are in separate processes (DDP).
-                    # Each process has its own 'ollama_manager' module instance.
-                    
-                    # REMOVED suppress(Exception) to debug why Rank 1 fails to start
-                    # with suppress(Exception):
-                    ollama_manager.prepare(
-                        train_device="cuda",
-                        device_indexes=my_device_index,
-                        multi_gpu=False, # Treat as single-GPU instance for this specific server
-                        port=my_port
-                    )
+                        prob_pct = int(detail_cfg.get('caption_probability', 0.0) * 100)
+                        print(f"[Detail Captions] Rank {rank}/{world_size} generating captions for epoch {variation} (~{prob_pct}% of {len(my_shard_indices)} crops)...")
+                        sys.stdout.flush()
 
-                    # Ensure model exists locally on this rank's server
-                    # Use 127.0.0.1 to avoid localhost IPv6 resolution issues on Windows
-                    my_endpoint = f"http://127.0.0.1:{my_port}"
-                    # Override the config endpoint for this session to force using our private server
-                    # We cheat a bit by mutating the dict for this method scope, or passing it explicitly
-                    
-                    # We need to update detail_cfg to point to our private port for _request_caption calls
-                    detail_cfg['caption_endpoint'] = my_endpoint
+                        # Unique port and device for this rank
+                        my_port = 11434 + rank
+                        my_device_index = str(rank)
+                        my_endpoint = f"http://127.0.0.1:{my_port}"
 
-                    with suppress(Exception):
-                        self._ensure_model_available(
-                            detail_cfg.get('caption_model') or "qwen2.5vl:3b",
-                            my_endpoint,
-                            float(detail_cfg.get('caption_timeout', 120.0) or 120.0),
+                        # Start per-rank Ollama
+                        ollama_manager.prepare(
+                            train_device="cuda",
+                            device_indexes=my_device_index,
+                            multi_gpu=False,
+                            port=my_port
                         )
+                        
+                        # Update config for this rank
+                        detail_cfg['caption_endpoint'] = my_endpoint
+                        
+                        # Ensure model exists
+                        with suppress(Exception):
+                            self._ensure_model_available(
+                                detail_cfg.get('caption_model') or "qwen2.5vl:3b",
+                                my_endpoint,
+                                float(detail_cfg.get('caption_timeout', 120.0) or 120.0),
+                            )
+                            
+                        target_indices = my_shard_indices
 
-                    # Pre-generate captions for MY shard items
+                    else:
+                        # --- SINGLE WORKER / WINDOWS ---
+                        # Rank 0 does all work. Other ranks skip/wait.
+                        if not is_master:
+                            self._pregeneration_complete = True
+                            return
+
+                        prob_pct = int(detail_cfg.get('caption_probability', 0.0) * 100)
+                        print(f"[Detail Captions] Generating captions for epoch {variation} (~{prob_pct}% of {total} crops)...")
+                        sys.stdout.flush()
+
+                        # Start standard single Ollama instance
+                        with suppress(Exception):
+                            ollama_manager.ensure_running()
+                        
+                        # Ensure model exists
+                        with suppress(Exception):
+                            self._ensure_model_available(
+                                detail_cfg.get('caption_model') or "qwen2.5vl:3b",
+                                detail_cfg.get('caption_endpoint') or "http://localhost:11434",
+                                float(detail_cfg.get('caption_timeout', 120.0) or 120.0),
+                            )
+                        
+                        target_indices = range(total)
+
+                    # --- COMMON GENERATION LOOP ---
                     caption_out_name = f"{self.prompt_name}_caption" if hasattr(self, 'prompt_name') else "prompt_caption"
                     
-                    # Helper function for generating a single caption
                     def _generate_one(idx):
                         try:
-                            # get_item calls _request_caption, which uses detail_cfg['caption_endpoint']
                             self.get_item(variation, idx, caption_out_name)
                         except Exception as e:
-                            print(f"[Detail Captions] Rank {rank} error pre-generating caption for item {idx}: {e}")
+                            prefix = f"Rank {rank}" if use_distributed_captioning else "Master"
+                            print(f"[Detail Captions] {prefix} error pre-generating caption for item {idx}: {e}")
                             sys.stdout.flush()
 
-                    # Even within a rank, we can use threads if we want concurrency against our private server
                     if self.parallel_workers > 1:
                         from concurrent.futures import ThreadPoolExecutor, as_completed
-                        print(f"[Detail Captions] Rank {rank} using {self.parallel_workers} parallel workers")
+                        print(f"[Detail Captions] Using {self.parallel_workers} parallel workers")
                         with ThreadPoolExecutor(max_workers=self.parallel_workers) as executor:
-                            futures = [executor.submit(_generate_one, i) for i in my_shard_indices]
+                            futures = [executor.submit(_generate_one, i) for i in target_indices]
                             for future in as_completed(futures):
                                 pass
                     else:
-                        for index in my_shard_indices:
+                        for index in target_indices:
                             _generate_one(index)
 
-                    print(f"[Detail Captions] Rank {rank} pre-generation complete. Metrics: {self._metrics}")
+                    print(f"[Detail Captions] Pre-generation complete. Metrics: {self._metrics}")
                     sys.stdout.flush()
                     self._pregeneration_complete = True
         except Exception as e:
