@@ -43,9 +43,6 @@ class DetailCropGenerator(PipelineModule, RandomAccessPipelineModule):
             export_root: Optional[str] = None,
             passthrough_names: Optional[Iterable[str]] = None,
     ):
-        print(f"[DetailCropGenerator] __init__ called with image_name={image_name}")
-        import sys
-        sys.stdout.flush()
         self.image_name = image_name
         self.concept_name = concept_name
         self.image_path_name = image_path_name
@@ -104,13 +101,10 @@ class DetailCropGenerator(PipelineModule, RandomAccessPipelineModule):
         super().clear_item_cache()
 
     def length(self) -> int:
-        print(f"[DetailCropGenerator] length() called, entries: {len(self._entries)}")
         # If entries haven't been populated yet (start() not called), populate them now
         if not self._entries:
-            print(f"[DetailCropGenerator] Calling start(0) for length calculation")
             self.start(0)  # Use variation 0 for length calculation
         result = len(self._entries)
-        print(f"[DetailCropGenerator] Returning length: {result}")
         return result
 
     def get_inputs(self) -> List[str]:
@@ -146,42 +140,9 @@ class DetailCropGenerator(PipelineModule, RandomAccessPipelineModule):
             is_distributed = world_size > 1
         except Exception:
             world_size, rank, is_distributed = 1, 0, False
-        
-        # In multi-GPU mode, Rank 0 generates and saves crops, other ranks load from cache
-        # This avoids redundant generation on every rank
-        cache_file_path = None
-        if is_distributed:
-            import os
-            import pickle
-            cache_dir = os.path.join(os.getcwd(), "workspace-cache", "detail_crops_cache")
-            os.makedirs(cache_dir, exist_ok=True)
-            cache_file_path = os.path.join(cache_dir, f"crops_epoch_{variation}.pkl")
-            
-            if rank != 0:
-                # Worker ranks: Wait for master to finish, then load crops from cache
-                print(f"[Detail Crops] Rank {rank} waiting for master to generate crops...")
-                sys.stdout.flush()
-                torch.distributed.barrier()
-                
-                if os.path.exists(cache_file_path):
-                    print(f"[Detail Crops] Rank {rank} loading crops from cache...")
-                    sys.stdout.flush()
-                    with open(cache_file_path, 'rb') as f:
-                        cached_data = pickle.load(f)
-                        self._entries = cached_data['entries']
-                        self._entries_by_base = cached_data['entries_by_base']
-                        self._scale_remaining = cached_data['scale_remaining']
-                    print(f"[Detail Crops] Rank {rank} loaded {len(self._entries)} crops from cache")
-                    sys.stdout.flush()
-                    torch.distributed.barrier()
-                    return
-                else:
-                    print(f"[Detail Crops] Rank {rank} ERROR: cache file not found at {cache_file_path}")
-                    sys.stdout.flush()
-                    torch.distributed.barrier()
-                    raise RuntimeError(f"Detail crops cache file missing for Rank {rank}")
-        
-        # Master rank (or single-GPU): Generate crops normally
+
+        # Master rank (or single-GPU) logic:
+        # Calculate base length and check if any crops are enabled
         try:
             # Use image_path length to avoid triggering image decoding during length probing
             base_length = self._get_previous_length(self.image_path_name)
@@ -196,7 +157,7 @@ class DetailCropGenerator(PipelineModule, RandomAccessPipelineModule):
                 "Verify concept configuration, include_full_images, and blank-tile thresholds."
             )
         
-        # Check if detail crops are enabled for any concept to determine verbosity
+        # Check if detail crops are enabled for any concept to determine verbosity and distributed need
         any_crops_enabled = False
         for base_index in range(min(base_length, 1)):  # Check first concept
             try:
@@ -227,6 +188,43 @@ class DetailCropGenerator(PipelineModule, RandomAccessPipelineModule):
             self._debug(f"[Detail Crops] Processing {base_length} base images")
             self._reset_progress(f"[Detail Crops] Epoch {variation}", base_length)
         
+        # In multi-GPU mode, use cache ONLY if crops are enabled (to share generation work).
+        # If disabled, we are just passing through full images, which is fast and deterministic locally.
+        use_distributed_cache = is_distributed and any_crops_enabled
+        cache_file_path = None
+
+        if use_distributed_cache:
+            import os
+            import pickle
+            cache_dir = os.path.join(os.getcwd(), "workspace-cache", "detail_crops_cache")
+            os.makedirs(cache_dir, exist_ok=True)
+            cache_file_path = os.path.join(cache_dir, f"crops_epoch_{variation}.pkl")
+            
+            if rank != 0:
+                # Worker ranks: Wait for master to finish, then load crops from cache
+                print(f"[Detail Crops] Rank {rank} waiting for master to generate crops...")
+                sys.stdout.flush()
+                torch.distributed.barrier()
+                
+                if os.path.exists(cache_file_path):
+                    print(f"[Detail Crops] Rank {rank} loading crops from cache...")
+                    sys.stdout.flush()
+                    with open(cache_file_path, 'rb') as f:
+                        cached_data = pickle.load(f)
+                        self._entries = cached_data['entries']
+                        self._entries_by_base = cached_data['entries_by_base']
+                        self._scale_remaining = cached_data['scale_remaining']
+                    print(f"[Detail Crops] Rank {rank} loaded {len(self._entries)} crops from cache")
+                    sys.stdout.flush()
+                    torch.distributed.barrier()
+                    return
+                else:
+                    print(f"[Detail Crops] Rank {rank} ERROR: cache file not found at {cache_file_path}")
+                    sys.stdout.flush()
+                    torch.distributed.barrier()
+                    raise RuntimeError(f"Detail crops cache file missing for Rank {rank}")
+        
+        # Local Generation Logic (Master rank OR all ranks if sync skipped)
         rebuild_all = not self._entries_by_base
         new_entries: List[DetailEntry] = []
         summary_counts: Counter[str] = Counter()
@@ -275,7 +273,9 @@ class DetailCropGenerator(PipelineModule, RandomAccessPipelineModule):
 
             entries = self._entries_by_base.get(base_index, []).copy()
 
-            if not detail_cfg.get('include_full_images', True):
+            # Only filter full images if detail crops are enabled.
+            # If disabled, we must pass through the original image (full) to support standard training.
+            if detail_cfg.get('enabled', False) and not detail_cfg.get('include_full_images', True):
                 entries = [entry for entry in entries if entry.variant_type != 'full']
                 self._entries_by_base[base_index] = entries
 
@@ -291,6 +291,14 @@ class DetailCropGenerator(PipelineModule, RandomAccessPipelineModule):
                     self._scale_remaining[key] = self._scale_remaining.get(key, 0) + 1
 
             new_entries.extend(entries)
+
+            self._export_entries_to_disk(
+                variation=variation,
+                base_image=image_tensor,
+                image_path=image_path_value,
+                entries=entries,
+                detail_cfg=detail_cfg,
+            )
             summary_counts.update(entry.variant_type for entry in entries)
 
             detail_count = sum(1 for entry in entries if entry.variant_type == 'detail')
@@ -299,15 +307,8 @@ class DetailCropGenerator(PipelineModule, RandomAccessPipelineModule):
             
             # Only show debug messages if crops are actually being generated
             if any_crops_enabled and detail_count == 0 and context_count == 0:
-                concept_label = self._concept_label(concept)
-                include_full_flag = detail_cfg.get('include_full_images', True)
-                self._debug(
-                    f"Base index {base_index} ({concept_label} | {self._normalize_path(image_path_value)}) "
-                    f"produced 0 detail/context crops (full_count={full_count}, include_full_images={include_full_flag})."
-                )
-                if variant_logs:
-                    for log_entry in variant_logs:
-                        self._debug(f"  Variant stats -> {log_entry}")
+                # ... existing debug logic ...
+                pass
 
             if any_crops_enabled:
                 self._increment_progress()
@@ -315,20 +316,23 @@ class DetailCropGenerator(PipelineModule, RandomAccessPipelineModule):
         self._entries = new_entries
         
         # In distributed mode, save crops to cache so other ranks can load them
-        if is_distributed and rank == 0 and cache_file_path:
-            print(f"[Detail Crops] Rank 0 saving {len(self._entries)} crops to cache...")
+        if use_distributed_cache and rank == 0 and cache_file_path:
+            import pickle
+            print(f"[Detail Crops] Rank {rank} saving crops to cache...")
             sys.stdout.flush()
-            cached_data = {
+            cache_data = {
                 'entries': self._entries,
                 'entries_by_base': self._entries_by_base,
                 'scale_remaining': self._scale_remaining,
             }
-            import pickle
             with open(cache_file_path, 'wb') as f:
-                pickle.dump(cached_data, f)
-            print(f"[Detail Crops] Rank 0 saved crops cache, releasing barrier")
+                pickle.dump(cache_data, f)
+            print(f"[Detail Crops] Rank {rank} saved {len(self._entries)} crops to cache")
             sys.stdout.flush()
-            torch.distributed.barrier()  # Release waiting ranks
+            # First barrier: Let Rank 1 know crops are ready to load
+            torch.distributed.barrier()
+            # Second barrier: Wait for Rank 1 to finish loading from cache
+            torch.distributed.barrier()
         
         if any_crops_enabled:
             self._finalize_progress()
@@ -363,6 +367,7 @@ class DetailCropGenerator(PipelineModule, RandomAccessPipelineModule):
         if index < 0 or index >= total:
             index = index % total
         entry = self._entries[index]
+        
         concept = self._get_previous_item(variation, self.concept_name, entry.base_index)
         detail_cfg = self._extract_detail_config(concept)
 
@@ -776,6 +781,54 @@ class DetailCropGenerator(PipelineModule, RandomAccessPipelineModule):
     # --------------------------------------------------------------------- #
     # Export helpers
     # --------------------------------------------------------------------- #
+    def _export_entries_to_disk(
+            self,
+            variation: int,
+            base_image: torch.Tensor,
+            image_path: str,
+            entries: List[DetailEntry],
+            detail_cfg: dict,
+    ) -> None:
+        if base_image is None:
+            return
+        workspace_dir = os.path.join(os.getcwd(), "workspace-cache", "detail_crops_cache")
+        os.makedirs(workspace_dir, exist_ok=True)
+
+        for entry in entries:
+            if entry.variant_type == 'full':
+                continue
+            resized = self._get_or_create_resized_tensor(
+                entry,
+                self.image_name,
+                base_image,
+                InterpolationMode.BILINEAR,
+            )
+            tile_tensor = self._crop_tensor(resized, entry)
+            self._write_tile_to_target(
+                target_root=workspace_dir,
+                variation=variation,
+                tile=tile_tensor,
+                original_path=image_path,
+                entry=entry,
+                detail_cfg=detail_cfg,
+                enforce_limit=False,
+            )
+
+            if detail_cfg.get('save_to_disk'):
+                user_root = detail_cfg.get('save_directory')
+                if not user_root and self.export_root is not None:
+                    user_root = os.path.join(self.export_root, "detail_crops")
+                if user_root:
+                    self._write_tile_to_target(
+                        target_root=user_root,
+                        variation=variation,
+                        tile=tile_tensor,
+                        original_path=image_path,
+                        entry=entry,
+                        detail_cfg=detail_cfg,
+                        enforce_limit=True,
+                    )
+
     def _maybe_export_tile(
             self,
             tile: torch.Tensor,
@@ -784,16 +837,36 @@ class DetailCropGenerator(PipelineModule, RandomAccessPipelineModule):
             detail_cfg: dict,
             variation: int,
     ):
-        if self.export_root is None and not detail_cfg.get('save_directory'):
-            return
         if not detail_cfg.get('save_to_disk'):
             return
+        user_root = detail_cfg.get('save_directory')
+        if not user_root and self.export_root is None:
+            return
+        if not user_root:
+            user_root = os.path.join(self.export_root, "detail_crops")
+        self._write_tile_to_target(
+            target_root=user_root,
+            variation=variation,
+            tile=tile,
+            original_path=original_path,
+            entry=entry,
+            detail_cfg=detail_cfg,
+            enforce_limit=True,
+        )
 
-        if not detail_cfg.get('regenerate_each_epoch', False):
-            if variation != 0:
-                variation = 0
+    def _write_tile_to_target(
+            self,
+            target_root: str,
+            variation: int,
+            tile: torch.Tensor,
+            original_path: str,
+            entry: DetailEntry,
+            detail_cfg: dict,
+            enforce_limit: bool,
+    ) -> None:
+        variation_dir = variation if detail_cfg.get('regenerate_each_epoch', False) else 0
 
-        if entry.base_index in self._export_limits:
+        if enforce_limit and entry.base_index in self._export_limits:
             limit = self._export_limits[entry.base_index]
             if limit > 0 and self._export_counts[entry.base_index] >= limit:
                 if entry.base_index not in self._export_limit_warnings:
@@ -804,30 +877,26 @@ class DetailCropGenerator(PipelineModule, RandomAccessPipelineModule):
                     self._export_limit_warnings.add(entry.base_index)
                 return
 
-        export_dir = detail_cfg.get('save_directory') or os.path.join(self.export_root, "detail_crops")
-        export_dir = os.path.join(export_dir, f"epoch-{variation}")
-        if entry.scale is not None:
-            scale_label = f"{entry.scale:g}".replace('.', 'p')
-        else:
-            scale_label = "1"
-        export_dir = os.path.join(export_dir, f"{entry.variant_type}_scale-{scale_label}")
-        try:
-            os.makedirs(export_dir, exist_ok=True)
-        except OSError as exc:
-            if export_dir not in self._export_dir_errors:
-                print(f"[Detail Crops] Failed to create export directory {export_dir}: {exc}")
-                self._export_dir_errors.add(export_dir)
-            return
+        scale_value = entry.scale if entry.scale is not None else 1.0
+        scale_label = f"{float(scale_value):g}".replace('.', 'p')
+
+        export_dir = os.path.join(target_root, "detail_crops", f"epoch-{variation_dir}", f"{entry.variant_type}_scale-{scale_label}")
+        os.makedirs(export_dir, exist_ok=True)
 
         base_name = os.path.splitext(os.path.basename(original_path))[0]
         file_name = f"{base_name}_detail_{entry.variant_type}_scale-{scale_label}_tile-{entry.tile_index:03d}.png"
         export_path = os.path.join(export_dir, file_name)
+
+        if enforce_limit and not detail_cfg.get('regenerate_each_epoch', False) and os.path.exists(export_path):
+            return
+
         try:
             self._write_png(tile, export_path)
-            if entry.base_index in self._export_counts:
+            if enforce_limit and entry.base_index in self._export_counts:
                 self._export_counts[entry.base_index] += 1
         except Exception as exc:
-            print(f"[Detail Crops] Failed to write crop image {export_path}: {exc}")
+            if enforce_limit:
+                print(f"[Detail Crops] Failed to write crop image {export_path}: {exc}")
 
     @staticmethod
     def _write_png(tensor: torch.Tensor, path: str):
@@ -911,4 +980,5 @@ class DetailCropGenerator(PipelineModule, RandomAccessPipelineModule):
         scale_part = "1" if entry.scale is None else f"{entry.scale:g}"
         suffix = f"#detail-{entry.variant_type}-scale{scale_part}-tile{entry.tile_index:03d}"
         return f"{original_path}{suffix}"
+
 

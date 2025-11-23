@@ -301,16 +301,17 @@ class GenericTrainer(BaseTrainer):
         for concept_idx, concept in enumerate(concepts):
             detail_cfg = getattr(getattr(concept, "image", None), "detail_crops", None)
             if detail_cfg is None:
-                print(f"[Clear Detail Crops] Concept {concept_idx}: no detail_crops config, skipping")
+                # print(f"[Clear Detail Crops] Concept {concept_idx}: no detail_crops config, skipping")
                 continue
             
             enabled = getattr(detail_cfg, "enabled", False)
             save_to_disk = getattr(detail_cfg, "save_to_disk", False)
-            print(f"[Clear Detail Crops] Concept {concept_idx}: enabled={enabled}, save_to_disk={save_to_disk}")
+            if enabled:
+                print(f"[Clear Detail Crops] Concept {concept_idx}: enabled={enabled}, save_to_disk={save_to_disk}")
             
             # Check if detail crops are enabled (regardless of save_to_disk)
             if not enabled:
-                print(f"[Clear Detail Crops] Concept {concept_idx}: detail crops not enabled, skipping")
+                # print(f"[Clear Detail Crops] Concept {concept_idx}: detail crops not enabled, skipping")
                 continue
 
             candidate_dirs: list[Path] = []
@@ -343,6 +344,75 @@ class GenericTrainer(BaseTrainer):
                 shutil.rmtree(resolved, ignore_errors=True)
                 cleared_dirs.add(resolved)
 
+    def __detail_crops_require_parallel_execution(self) -> bool:
+        try:
+            if self.__config_concepts_have_detail_crops_enabled():
+                return True
+            if self.__concept_file_has_detail_crops_enabled():
+                return True
+        except Exception as exc:
+            if multi.is_master():
+                print(f"[Trainer] Warning: failed to inspect detail crop configuration: {exc}")
+                sys.stdout.flush()
+        return False
+
+    def __config_concepts_have_detail_crops_enabled(self) -> bool:
+        concepts = getattr(self.config, "concepts", None)
+        if not concepts:
+            return False
+        for concept_idx, concept in enumerate(concepts):
+            detail_cfg = getattr(getattr(concept, "image", None), "detail_crops", None)
+            if detail_cfg and getattr(detail_cfg, "enabled", False):
+                if multi.is_master():
+                    print(f"[Trainer] Detail crops enabled for concept index {concept_idx} (embedded config)")
+                    sys.stdout.flush()
+                return True
+        return False
+
+    def __concept_file_has_detail_crops_enabled(self) -> bool:
+        concept_path = (getattr(self.config, "concept_file_name", "") or "").strip()
+        if not concept_path:
+            return False
+        workspace_dir = getattr(self.config, "workspace_dir", "")
+        candidate_paths = [Path(concept_path)]
+        if workspace_dir:
+            candidate_paths.append(Path(workspace_dir) / concept_path)
+        seen_paths: set[str] = set()
+        for raw_path in candidate_paths:
+            expanded = raw_path.expanduser()
+            try:
+                resolved_str = str(expanded.resolve())
+            except Exception:
+                resolved_str = str(expanded)
+            if resolved_str in seen_paths:
+                continue
+            seen_paths.add(resolved_str)
+            if not expanded.exists():
+                continue
+            try:
+                if multi.is_master():
+                    print(f"[Trainer] Inspecting concept file for detail crops: {expanded}")
+                    sys.stdout.flush()
+                with open(expanded, "r", encoding="utf-8") as concept_file:
+                    raw_concepts = json.load(concept_file)
+            except Exception as exc:
+                if multi.is_master():
+                    print(f"[Trainer] Warning: Failed to read concept file '{expanded}': {exc}")
+                    sys.stdout.flush()
+                return False
+            concepts_iter = raw_concepts.get("concepts", []) if isinstance(raw_concepts, dict) else raw_concepts
+            for concept_idx, concept in enumerate(concepts_iter or []):
+                if not isinstance(concept, dict):
+                    continue
+                detail_cfg = ((concept.get("image") or {})).get("detail_crops") or {}
+                if detail_cfg.get("enabled", False):
+                    if multi.is_master():
+                        print(f"[Trainer] Detail crops enabled via concept file (concept index {concept_idx})")
+                        sys.stdout.flush()
+                    return True
+            break
+        return False
+
     def __prune_backups(self, backups_to_keep: int):
         backup_dirpath = Path(self.config.workspace_dir) / "backup"
         if backup_dirpath.exists():
@@ -365,8 +435,14 @@ class GenericTrainer(BaseTrainer):
         self.sample_queue.append(fun)
 
     def __execute_sample_during_training(self):
-        for fun in self.sample_queue:
-            fun()
+        for idx, fun in enumerate(self.sample_queue):
+            try:
+                fun()
+            except Exception as exc:
+                print(f"[Trainer] ERROR executing sample {idx+1}: {exc}")
+                traceback.print_exc()
+                sys.stdout.flush()
+                raise
         self.sample_queue = []
 
     def __sample_loop(
@@ -378,7 +454,8 @@ class GenericTrainer(BaseTrainer):
             folder_postfix: str = "",
             is_custom_sample: bool = False,
     ):
-        for i, sample_config in multi.distributed_enumerate(sample_config_list, distribute=not self.config.samples_to_tensorboard and not ema_applied):
+        enumerated = list(multi.distributed_enumerate(sample_config_list, distribute=not self.config.samples_to_tensorboard and not ema_applied))
+        for i, sample_config in enumerated:
             if sample_config.enabled:
                 try:
                     safe_prompt = path_util.safe_filename(sample_config.prompt)
@@ -477,6 +554,9 @@ class GenericTrainer(BaseTrainer):
             #the EMA model only exists in the master process, so EMA sampling is done on one GPU only
             #non-EMA sampling is also restricted to master rank (see early return above)
             assert multi.is_master() and self.config.ema != EMAMode.OFF
+            if multi.is_master():
+                print(f"[Trainer] Copying EMA to parameters...")
+                sys.stdout.flush()
             self.model.ema.copy_ema_to(self.parameters, store_temp=True)
 
         self.__sample_loop(
@@ -694,11 +774,14 @@ class GenericTrainer(BaseTrainer):
         torch_gc()
 
     def __needs_sample(self, train_progress: TrainProgress):
-        return self.single_action_elapsed(
+        skip_first_result = self.single_action_elapsed(
             "sample_skip_first", self.config.sample_skip_first, self.config.sample_after_unit, train_progress
-        ) and self.repeating_action_needed(
+        )
+        repeating_result = self.repeating_action_needed(
             "sample", self.config.sample_after, self.config.sample_after_unit, train_progress
         )
+        result = skip_first_result and repeating_result
+        return result
 
     def __needs_backup(self, train_progress: TrainProgress):
         return self.repeating_action_needed(
@@ -805,6 +888,13 @@ class GenericTrainer(BaseTrainer):
         ema_loss = None
         ema_loss_steps = 0
         epochs = range(train_progress.epoch, self.config.epochs, 1)
+        detail_crops_parallel_hint = getattr(self, "_detail_crops_parallel_hint", None)
+        if detail_crops_parallel_hint is None:
+            detail_crops_parallel_hint = self.__detail_crops_require_parallel_execution()
+            self._detail_crops_parallel_hint = detail_crops_parallel_hint
+        if multi.is_master() and detail_crops_parallel_hint:
+            print(f"[Trainer] Detail crop parallel execution hint: {detail_crops_parallel_hint}")
+            sys.stdout.flush()
         for _epoch in tqdm(epochs, desc="epoch") if multi.is_master() else epochs:
             self.callbacks.on_update_status("Starting epoch/caching")
 
@@ -813,45 +903,23 @@ class GenericTrainer(BaseTrainer):
             # master_first() is only needed if we're writing to shared latent cache, but crops/captions
             # use sharding and separate files, so parallelism is safe.
             # We detect this by checking if detail crops are enabled in the config.
-            use_parallel_start = False
-            try:
-                # Check if any concept has detail crops enabled
-                if hasattr(self.config, 'concepts') and self.config.concepts:
-                    for concept in self.config.concepts:
-                        if hasattr(concept, 'image') and hasattr(concept.image, 'detail_crops'):
-                            if getattr(concept.image.detail_crops, 'enabled', False):
-                                use_parallel_start = True
-                                break
-            except Exception:
-                pass
+            use_parallel_start = detail_crops_parallel_hint
             
             if use_parallel_start and multi.world_size() > 1:
                 # Parallel execution for all ranks (detail crops + captions)
                 if self.config.latent_caching:
-                    print("[Trainer] Calling start_next_epoch() in PARALLEL mode with latent_caching enabled...")
-                    sys.stdout.flush()
                     try:
                         self.data_loader.get_data_set().start_next_epoch()
-                        print("[Trainer] start_next_epoch() completed, setting up train device...")
-                        sys.stdout.flush()
                     except Exception as e:
                         print(f"[Trainer] ERROR in start_next_epoch(): {e}")
                         traceback.print_exc()
                         sys.stdout.flush()
                         raise
                     self.model_setup.setup_train_device(self.model, self.config)
-                    print("[Trainer] setup_train_device() completed")
-                    sys.stdout.flush()
                 else:
-                    print("[Trainer] Setting up train device first (no latent_caching, PARALLEL mode)...")
-                    sys.stdout.flush()
                     self.model_setup.setup_train_device(self.model, self.config)
-                    print("[Trainer] Calling start_next_epoch() in PARALLEL mode...")
-                    sys.stdout.flush()
                     try:
                         self.data_loader.get_data_set().start_next_epoch()
-                        print("[Trainer] start_next_epoch() completed")
-                        sys.stdout.flush()
                     except Exception as e:
                         print(f"[Trainer] ERROR in start_next_epoch(): {e}")
                         traceback.print_exc()
@@ -861,30 +929,18 @@ class GenericTrainer(BaseTrainer):
                 # Standard master_first execution (sequential for safety when writing to shared cache)
                 for _ in multi.master_first():
                     if self.config.latent_caching:
-                        print("[Trainer] Calling start_next_epoch() with latent_caching enabled...")
-                        sys.stdout.flush()
                         try:
                             self.data_loader.get_data_set().start_next_epoch()
-                            print("[Trainer] start_next_epoch() completed, setting up train device...")
-                            sys.stdout.flush()
                         except Exception as e:
                             print(f"[Trainer] ERROR in start_next_epoch(): {e}")
                             traceback.print_exc()
                             sys.stdout.flush()
                             raise
                         self.model_setup.setup_train_device(self.model, self.config)
-                        print("[Trainer] setup_train_device() completed")
-                        sys.stdout.flush()
                     else:
-                        print("[Trainer] Setting up train device first (no latent_caching)...")
-                        sys.stdout.flush()
                         self.model_setup.setup_train_device(self.model, self.config)
-                        print("[Trainer] Calling start_next_epoch()...")
-                        sys.stdout.flush()
                         try:
                             self.data_loader.get_data_set().start_next_epoch()
-                            print("[Trainer] start_next_epoch() completed")
-                            sys.stdout.flush()
                         except Exception as e:
                             print(f"[Trainer] ERROR in start_next_epoch(): {e}")
                             traceback.print_exc()
@@ -904,6 +960,7 @@ class GenericTrainer(BaseTrainer):
             torch_gc()
 
             if lr_scheduler is None:
+                approx_len_for_lr = self.data_loader.get_data_set().approximate_length()
                 lr_scheduler = create.create_lr_scheduler(
                     config=self.config,
                     optimizer=self.model.optimizer,
@@ -912,7 +969,7 @@ class GenericTrainer(BaseTrainer):
                     num_cycles=self.config.learning_rate_cycles,
                     min_factor=self.config.learning_rate_min_factor,
                     num_epochs=self.config.epochs,
-                    approximate_epoch_length=self.data_loader.get_data_set().approximate_length(),
+                    approximate_epoch_length=approx_len_for_lr,
                     batch_size=self.config.batch_size,
                     gradient_accumulation_steps=self.config.gradient_accumulation_steps,
                     global_step=train_progress.global_step
@@ -921,16 +978,25 @@ class GenericTrainer(BaseTrainer):
             current_epoch_length = self.data_loader.get_data_set().approximate_length()
 
             if multi.is_master():
-                batches = step_tqdm = tqdm(self.data_loader.get_data_loader(), desc="step", total=current_epoch_length,
+                data_loader_iter = self.data_loader.get_data_loader()
+                batches = step_tqdm = tqdm(data_loader_iter, desc="step", total=current_epoch_length,
                                  initial=train_progress.epoch_step)
             else:
                 batches = self.data_loader.get_data_loader()
+            
+            batch_count = 0
             for batch in batches:
+                batch_count += 1
+                
                 multi.sync_commands(self.commands)
+                
                 if self.commands.get_stop_command():
                     multi.warn_parameter_divergence(self.parameters, train_device)
 
-                if self.__needs_sample(train_progress) or self.commands.get_and_reset_sample_default_command():
+                needs_sample = self.__needs_sample(train_progress)
+                sample_command = self.commands.get_and_reset_sample_default_command()
+                
+                if needs_sample or sample_command:
                     self.__enqueue_sample_during_training(
                         lambda: self.__sample_during_training(train_progress, train_device)
                     )
@@ -952,9 +1018,10 @@ class GenericTrainer(BaseTrainer):
 
                 if self.__needs_gc(train_progress):
                     torch_gc()
-
+                
                 if not has_gradient:
-                    self.__execute_sample_during_training()
+                    if len(self.sample_queue) > 0:
+                        self.__execute_sample_during_training()
                     backup = self.commands.get_and_reset_backup_command()
                     save = self.commands.get_and_reset_save_command()
                     if multi.is_master() and (backup or save):

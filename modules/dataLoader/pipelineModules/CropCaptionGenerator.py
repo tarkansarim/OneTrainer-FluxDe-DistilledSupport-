@@ -1,4 +1,5 @@
 import base64
+import datetime
 import hashlib
 import io
 import json
@@ -7,8 +8,10 @@ import subprocess
 import sys
 import time
 import traceback
-from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout
+from pathlib import Path
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout, as_completed
 from contextlib import suppress
+from dataclasses import dataclass
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 import requests
@@ -18,7 +21,7 @@ from PIL import Image
 from mgds.PipelineModule import PipelineModule
 from mgds.pipelineModuleTypes.RandomAccessPipelineModule import RandomAccessPipelineModule
 
-from modules.dataLoader.pipelineModules.DetailCropGenerator import DetailCropGenerator, DetailEntry
+from modules.dataLoader.pipelineModules.DetailCropGenerator import DetailCropGenerator
 from modules.util import ollama_manager
 
 try:
@@ -28,6 +31,13 @@ except Exception:  # pragma: no cover - optional dependency
 
 
 _DEFAULT_CAPTION_MAX_TOKENS = 256
+
+
+@dataclass(frozen=True)
+class CaptionGPUConfig:
+    enabled: bool
+    device_indices: List[int]
+    base_port: int = 12134
 
 
 class CropCaptionGenerator(PipelineModule, RandomAccessPipelineModule):
@@ -45,6 +55,7 @@ class CropCaptionGenerator(PipelineModule, RandomAccessPipelineModule):
             image_path_name: str,
             additional_passthrough: Optional[Iterable[str]] = None,
             parallel_workers: int = 0,
+            caption_gpu_config: Optional[CaptionGPUConfig] = None,
     ):
         self.image_name = image_name
         self.concept_name = concept_name
@@ -52,6 +63,7 @@ class CropCaptionGenerator(PipelineModule, RandomAccessPipelineModule):
         self.image_path_name = image_path_name
         self.additional_passthrough = tuple(sorted(set(additional_passthrough or [])))
         self.parallel_workers = parallel_workers
+        self._caption_gpu_config = caption_gpu_config
         super().__init__()
 
         self._memory_cache: Dict[str, str] = {}
@@ -68,6 +80,28 @@ class CropCaptionGenerator(PipelineModule, RandomAccessPipelineModule):
         self._has_shutdown_ollama: bool = False
         self._length_calculation_mode: bool = False
         self._pregeneration_complete: bool = False
+
+    @staticmethod
+    def _run_cli_command(
+            args: List[str],
+            *,
+            env: Optional[dict] = None,
+            timeout: Optional[float] = None,
+            check: bool = False,
+    ) -> subprocess.CompletedProcess:
+        """
+        Execute a helper CLI command (ollama/sc/taskkill) with UTF-8 decoding so Windows consoles don't choke.
+        """
+        return subprocess.run(
+            args,
+            env=env,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="ignore",
+            timeout=timeout,
+            check=check,
+        )
 
     def clear_item_cache(self):
         super().clear_item_cache()
@@ -99,163 +133,269 @@ class CropCaptionGenerator(PipelineModule, RandomAccessPipelineModule):
         self._flush_metrics()
         self._current_variation = variation
         self._metrics = self._new_metrics()
-        self._reset_progress(f"[Detail Captions] Epoch {variation}", self.length())
+        total = self.length()
+        self._reset_progress(f"[Detail Captions] Epoch {variation}", total)
         self._has_shutdown_ollama = False
         super().clear_item_cache()
+        self._pregeneration_complete = False
 
-        # Determine distributed context
+        rank, world_size, distributed_ready = self._distributed_status()
+
+        if total <= 0:
+            self._pregeneration_complete = True
+            return
+
         try:
-            from modules.util import multi_gpu_util as _multi  # type: ignore
-            world_size = int(getattr(_multi, "world_size")())
-            rank = int(getattr(_multi, "rank")())
+            concept0 = self._get_previous_item(variation, self.concept_name, 0)
+            detail_cfg = DetailCropGenerator._extract_detail_config(concept0)
         except Exception:
-            world_size, rank = 1, 0
-        is_master = (rank == 0)
+            detail_cfg = {}
 
-        # Pre-generate all captions upfront for better UX and progress tracking
+        if (not detail_cfg.get('enable_captioning', False)
+                or not detail_cfg.get('enabled', False)  # Skip if detail crops are disabled entirely
+                or detail_cfg.get('caption_probability', 0.0) <= 0.0):
+            self._pregeneration_complete = True
+            return
+
+        barrier_pending = distributed_ready
         try:
-            total = self.length()
-            if total > 0:
-                concept0 = self._get_previous_item(variation, self.concept_name, 0)
-                detail_cfg = DetailCropGenerator._extract_detail_config(concept0)
-                if detail_cfg.get('enable_captioning', False) and detail_cfg.get('caption_probability', 0.0) > 0.0:
-                    # Distributed Captioning Implementation
-                    # Each rank starts its own Ollama server and processes its own share of the crops.
-                    # This allows fully utilizing all GPUs for caption generation.
-                    
-                    # Determine my share of the workload
-                    my_shard_indices = [i for i in range(total) if i % world_size == rank]
-                    
-                    if not my_shard_indices:
-                        # No work for this rank, mark complete and return
-                        self._pregeneration_complete = True
-                        return
-
-                    prob_pct = int(detail_cfg.get('caption_probability', 0.0) * 100)
-                    print(f"[Detail Captions] Rank {rank}/{world_size} generating captions for epoch {variation} (~{prob_pct}% of {len(my_shard_indices)} crops)...")
+            manifest_info = None
+            if rank == 0:
+                manifest_info = self._write_caption_manifest(variation, total)
+                job_count = manifest_info.get("job_count", 0)
+                if job_count > 0:
+                    print(f"[Detail Captions] Launching external caption job for {job_count} crops (manifest: {manifest_info['manifest_path']})")
                     sys.stdout.flush()
-                    
-                    # Barrier at START: Ensure all ranks are ready before ANY rank starts Ollama/captioning
-                    # This breaks out of the master_first() sequential execution and allows true parallelism
-                    try:
-                        from modules.util import multi_gpu_util as _multi
-                        if int(getattr(_multi, "world_size")()) > 1:
-                            # Verify distributed is actually initialized before calling barrier
-                            if not torch.distributed.is_initialized():
-                                raise RuntimeError(f"Rank {rank}: torch.distributed not initialized when trying to barrier!")
-                            
-                            # Test if ranks can communicate with a simple all_reduce
-                            test_tensor = torch.tensor([rank], dtype=torch.int32, device='cuda')
-                            print(f"[Detail Captions] Rank {rank} testing communication with all_reduce...")
-                            sys.stdout.flush()
-                            torch.distributed.all_reduce(test_tensor, op=torch.distributed.ReduceOp.SUM)
-                            print(f"[Detail Captions] Rank {rank} all_reduce result: {test_tensor.item()} (expected sum of ranks)")
-                            sys.stdout.flush()
-                            
-                            print(f"[Detail Captions] Rank {rank} syncing before starting Ollama servers...")
-                            sys.stdout.flush()
-                            torch.distributed.barrier()
-                            print(f"[Detail Captions] Rank {rank} barrier released, starting Ollama in parallel with other ranks")
-                            sys.stdout.flush()
-                    except Exception as barrier_exc:
-                        print(f"[Detail Captions] Rank {rank} START barrier exception: {barrier_exc}")
-                        traceback.print_exc()
-                        sys.stdout.flush()
-                        raise
-
-                    # Start per-rank Ollama instance
-                    # Use a unique port per rank to avoid collisions (default 11434, 11435, etc)
-                    my_port = 11434 + rank
-                    # Use only THIS rank's GPU index if we are in a distributed setting
-                    # Assuming 'rank' maps 1:1 to visible device index in standard DDP
-                    my_device_index = str(rank)
-                    
-                    print(f"[Detail Captions] Rank {rank} about to start Ollama on port {my_port} with GPU {my_device_index}")
+                    self._run_external_caption_job(manifest_info)
+                    # Ensure caption files are written and flushed before barrier
+                    print(f"[Detail Captions] External caption job completed, ensuring file synchronization...")
                     sys.stdout.flush()
-                    
-                    ollama_manager.prepare(
-                        train_device="cuda",
-                        device_indexes=my_device_index,
-                        multi_gpu=False, # Treat as single-GPU instance for this specific server
-                        port=my_port
-                    )
-
-                    # Ensure model exists locally on this rank's server
-                    # Use 127.0.0.1 to avoid localhost IPv6 resolution issues on Windows
-                    my_endpoint = f"http://127.0.0.1:{my_port}"
-                    # Override the config endpoint for this session to force using our private server
-                    # We cheat a bit by mutating the dict for this method scope, or passing it explicitly
-                    
-                    # We need to update detail_cfg to point to our private port for _request_caption calls
-                    detail_cfg['caption_endpoint'] = my_endpoint
-
-                    # Ensure model exists - NO FALLBACK, must succeed or crash
-                    self._ensure_model_available(
-                        detail_cfg.get('caption_model') or "qwen2.5vl:3b",
-                        my_endpoint,
-                        float(detail_cfg.get('caption_timeout', 120.0) or 120.0),
-                    )
-
-                    # Pre-generate captions for MY shard items
-                    caption_out_name = f"{self.prompt_name}_caption" if hasattr(self, 'prompt_name') else "prompt_caption"
-                    
-                    # Helper function for generating a single caption
-                    def _generate_one(idx):
-                        # We allow get_item to raise exceptions directly.
-                        # If any caption fails, we want the whole process to crash immediately
-                        # so we don't proceed to caching with missing data.
-                        self.get_item(variation, idx, caption_out_name)
-
-                    # Even within a rank, we can use threads if we want concurrency against our private server
-                    if self.parallel_workers > 1:
-                        from concurrent.futures import ThreadPoolExecutor, as_completed
-                        print(f"[Detail Captions] Rank {rank} using {self.parallel_workers} parallel workers")
-                        with ThreadPoolExecutor(max_workers=self.parallel_workers) as executor:
-                            futures = [executor.submit(_generate_one, i) for i in my_shard_indices]
-                            for future in as_completed(futures):
-                                # Check result to raise any exception that occurred in the thread
-                                future.result()
-                    else:
-                        for index in my_shard_indices:
-                            _generate_one(index)
-
-                    print(f"[Detail Captions] Rank {rank} pre-generation complete. Metrics: {self._metrics}")
+                    # Small delay to ensure file system sync (especially on Windows)
+                    time.sleep(0.5)
+                else:
+                    print(f"[Detail Captions] No crops selected for captioning at epoch {variation}; skipping external job.")
                     sys.stdout.flush()
-                    self._pregeneration_complete = True
-                    
-                    # Explicit barrier to ensure ALL ranks finish captioning before ANY rank proceeds to caching
-                    try:
-                        from modules.util import multi_gpu_util as _multi
-                        if int(getattr(_multi, "world_size")()) > 1:
-                            print(f"[Detail Captions] Rank {rank} waiting at END barrier for other ranks to finish...")
-                            sys.stdout.flush()
-                            
-                            # Use all_reduce to verify all ranks actually reached this point
-                            completion_signal = torch.tensor([1], dtype=torch.int32, device='cuda')
-                            torch.distributed.all_reduce(completion_signal, op=torch.distributed.ReduceOp.SUM)
-                            expected_sum = int(getattr(_multi, "world_size")())
-                            
-                            if completion_signal.item() != expected_sum:
-                                raise RuntimeError(
-                                    f"Rank {rank} END barrier check FAILED: "
-                                    f"Expected {expected_sum} ranks to complete captioning, got {completion_signal.item()}. "
-                                    f"One or more ranks failed to caption their share!"
-                                )
-                            
-                            print(f"[Detail Captions] Rank {rank} END barrier released, all {expected_sum} ranks finished captioning")
-                            sys.stdout.flush()
-                    except Exception as barrier_exc:
-                        print(f"[Detail Captions] Rank {rank} END barrier FATAL ERROR: {barrier_exc}")
-                        traceback.print_exc()
-                        sys.stdout.flush()
-                        raise
-        except Exception as e:
-            # If captioning fails, we MUST crash immediately to prevent training with broken data.
-            # Do NOT set _pregeneration_complete or suppress the error.
-            print(f"[Detail Captions] FATAL ERROR during pre-generation: {e}")
+            if distributed_ready:
+                self._distributed_barrier(rank, label="CAPTION_JOB_DONE")
+                barrier_pending = False
+                # Small delay to ensure file system is ready on all ranks
+                time.sleep(0.2)
+            self._pregeneration_complete = True
+        except Exception as exc:
+            if barrier_pending:
+                try:
+                    self._distributed_barrier(rank, label="CAPTION_JOB_DONE")
+                except Exception:
+                    pass
+            print(f"[Detail Captions] FATAL ERROR during external caption job: {exc}")
             traceback.print_exc()
             sys.stdout.flush()
-            raise  # Re-raise to abort training
+            raise
+
+    def _write_caption_manifest(self, variation: int, total: int) -> Dict[str, Any]:
+        entries: List[Dict[str, Any]] = []
+        for idx in range(total):
+            try:
+                entry = self._build_manifest_entry(variation, idx)
+            except Exception as exc:
+                raise RuntimeError(f"Failed to build caption manifest entry at index {idx}: {exc}") from exc
+            if not entry:
+                continue
+            entries.append(entry)
+
+        if not entries:
+            return {"manifest_path": "", "log_path": "", "job_count": 0}
+
+        cache_root = os.path.join(os.getcwd(), "workspace-cache", "detail_crops_cache")
+        manifest_dir = os.path.join(cache_root, "detail_captions", "manifests")
+        os.makedirs(manifest_dir, exist_ok=True)
+        timestamp = datetime.datetime.utcnow().strftime("%Y%m%d-%H%M%S")
+        manifest_name = f"caption-manifest-epoch{variation}-{timestamp}.json"
+        manifest_path = os.path.join(manifest_dir, manifest_name)
+        log_path = os.path.join(manifest_dir, f"{Path(manifest_name).stem}.log")
+
+        # Remove helper-only fields before writing
+        for entry in entries:
+            entry.pop("save_directory", None)
+
+        manifest = {
+            "version": 1,
+            "created_at": datetime.datetime.utcnow().isoformat() + "Z",
+            "epoch": variation,
+            "job_count": len(entries),
+            "config": {
+                "gpu_indices": self._resolve_caption_gpu_indices(),
+                "base_port": self._caption_gpu_config.base_port if (self._caption_gpu_config and self._caption_gpu_config.base_port) else 12134,
+                "show_console": self._debug_show_console(),
+            },
+            "jobs": entries,
+        }
+
+        with open(manifest_path, "w", encoding="utf-8") as fh:
+            json.dump(manifest, fh, indent=2)
+
+        return {"manifest_path": manifest_path, "log_path": log_path, "job_count": len(entries)}
+
+    def _build_manifest_entry(self, variation: int, dataset_index: int) -> Optional[Dict[str, Any]]:
+        concept = self._get_previous_item(variation, self.concept_name, dataset_index)
+        detail_cfg = DetailCropGenerator._extract_detail_config(concept)
+        if not detail_cfg.get('enable_captioning', False):
+            return None
+
+        caption_probability = max(0.0, min(1.0, detail_cfg.get('caption_probability', 0.0)))
+        if caption_probability <= 0.0:
+            return None
+
+        if not detail_cfg.get('save_to_disk', False):
+            raise RuntimeError(
+                "Detail crop captioning requires 'save_to_disk=True' in the detail crop configuration when using the external captioner."
+            )
+        save_dir = os.path.join(os.getcwd(), "workspace-cache", "detail_crops_cache")
+        save_dir = os.path.abspath(save_dir)
+
+        data: Dict[str, Any] = {
+            self.concept_name: concept,
+            self.image_path_name: self._get_previous_item(variation, self.image_path_name, dataset_index),
+            'detail_crop_type': self._get_previous_item(variation, 'detail_crop_type', dataset_index),
+            'detail_crop_scale': self._get_previous_item(variation, 'detail_crop_scale', dataset_index),
+            'detail_crop_index': self._get_previous_item(variation, 'detail_crop_index', dataset_index),
+            'detail_crop_coords': self._get_previous_item(variation, 'detail_crop_coords', dataset_index),
+            'detail_crop_source_resolution': self._get_previous_item(variation, 'detail_crop_source_resolution', dataset_index),
+            'detail_crop_prompt_context': self._get_previous_item(variation, 'detail_crop_prompt_context', dataset_index),
+        }
+
+        crop_type = data['detail_crop_type']
+        if crop_type == 'full':
+            return None
+
+        prompt_context = data.get('detail_crop_prompt_context') or ""
+        scale_value = float(data.get('detail_crop_scale') or 1.0)
+        tile_index = int(data.get('detail_crop_index') or 0)
+        image_identifier = data[self.image_path_name]
+
+        selection_value = self._deterministic_selection_value(data, detail_cfg)
+        if selection_value >= caption_probability:
+            return None
+
+        export_path = self._resolve_exported_crop_path(
+            detail_cfg,
+            variation,
+            image_identifier,
+            crop_type,
+            scale_value,
+            tile_index,
+        )
+
+        if not os.path.isfile(export_path):
+            raise RuntimeError(f"Expected detail crop image missing at {export_path}")
+
+        caption_path = self._caption_file_path(variation, data, detail_cfg, create_dirs=True)
+        if not caption_path:
+            raise RuntimeError("Failed to resolve caption output path; ensure detail crop save_directory is configured.")
+
+        formatted_prompt = self._format_user_prompt(
+            detail_cfg.get('caption_user_prompt') or "",
+            prompt_context,
+            data,
+            self._strip_detail_identifier(image_identifier),
+        )
+
+        entry = {
+            "dataset_index": dataset_index,
+            "image_path": export_path,
+            "caption_path": caption_path,
+            "prompt": formatted_prompt,
+            "prompt_context": prompt_context,
+            "crop_type": crop_type,
+            "scale": scale_value,
+            "tile_index": tile_index,
+            "model": detail_cfg.get('caption_model') or "qwen2.5vl:3b",
+            "system_prompt": detail_cfg.get('caption_system_prompt') or "",
+            "timeout": float(detail_cfg.get('caption_timeout', 120.0) or 120.0),
+            "max_retries": int(detail_cfg.get('caption_max_retries', 4) or 4),
+            "max_tokens": int(detail_cfg.get('caption_max_tokens', _DEFAULT_CAPTION_MAX_TOKENS) or _DEFAULT_CAPTION_MAX_TOKENS),
+            "selection_value": selection_value,
+            "concept_label": DetailCropGenerator._concept_label(concept),
+        }
+        return entry
+
+    @staticmethod
+    def _strip_detail_identifier(identifier: str) -> str:
+        if not identifier:
+            return ""
+        marker = "#detail"
+        if marker in identifier:
+            return identifier.split(marker, 1)[0]
+        return identifier
+
+    def _resolve_exported_crop_path(
+            self,
+            detail_cfg: dict,
+            variation: int,
+            image_identifier: str,
+            crop_type: str,
+            scale_value: float,
+            tile_index: int,
+    ) -> str:
+        save_dir = detail_cfg.get('save_directory')
+        if not save_dir:
+            raise RuntimeError("Detail crop save_directory is required to locate exported crops.")
+        save_dir = os.path.abspath(save_dir)
+        epoch_value = variation if detail_cfg.get('regenerate_each_epoch', False) else 0
+        try:
+            numeric_scale = float(scale_value)
+        except (TypeError, ValueError):
+            numeric_scale = 1.0
+        if numeric_scale == 1.0:
+            scale_label = "1"
+        else:
+            scale_label = f"{numeric_scale:g}".replace('.', 'p')
+        variant_dir = os.path.join(save_dir, "detail_crops", f"epoch-{epoch_value}", f"{crop_type}_scale-{scale_label}")
+        base_name = os.path.splitext(os.path.basename(self._strip_detail_identifier(image_identifier)))[0]
+        file_name = f"{base_name}_detail_{crop_type}_scale-{scale_label}_tile-{int(tile_index):03d}.png"
+        return os.path.abspath(os.path.join(variant_dir, file_name))
+
+    def _resolve_caption_gpu_indices(self) -> List[int]:
+        if self._caption_gpu_config and self._caption_gpu_config.enabled and self._caption_gpu_config.device_indices:
+            return [int(idx) for idx in self._caption_gpu_config.device_indices]
+        return [0]
+
+    def _run_external_caption_job(self, manifest_info: Dict[str, Any]) -> None:
+        manifest_path = manifest_info.get("manifest_path")
+        if not manifest_path:
+            return
+        script_path = Path(__file__).resolve().parents[3] / "scripts" / "run_ollama_caption_job.py"
+        if not script_path.exists():
+            raise RuntimeError(f"Unable to locate external caption runner at {script_path}")
+        log_path = manifest_info.get("log_path") or str(script_path.with_suffix(".log"))
+        os.makedirs(os.path.dirname(log_path), exist_ok=True)
+        cmd = [
+            sys.executable,
+            str(script_path),
+            "--manifest",
+            manifest_path,
+        ]
+        with open(log_path, "w", encoding="utf-8") as log_file:
+            process = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                cwd=str(script_path.parents[1]),
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+            )
+            assert process.stdout is not None
+            for line in process.stdout:
+                log_file.write(line)
+                log_file.flush()
+                print(line.rstrip("\n"))
+                sys.stdout.flush()
+            return_code = process.wait()
+        if return_code != 0:
+            raise RuntimeError(
+                f"External caption job failed with exit code {return_code}. See log file: {log_path}"
+            )
 
     def get_item(self, variation: int, index: int, requested_name: str = None) -> Dict[str, Any]:
         # Compute caption output name (may be called before __init__ completes)
@@ -264,7 +404,8 @@ class CropCaptionGenerator(PipelineModule, RandomAccessPipelineModule):
         # Handle passthrough requests (data we don't modify)
         if requested_name != caption_out_name and requested_name in self.get_inputs():
             # Just return the upstream data for passthrough fields
-            return {requested_name: self._get_previous_item(variation, requested_name, index)}
+            result = self._get_previous_item(variation, requested_name, index)
+            return {requested_name: result}
 
         # For caption requests, do the full processing
         required_names = [
@@ -285,66 +426,89 @@ class CropCaptionGenerator(PipelineModule, RandomAccessPipelineModule):
         ]
 
         data: Dict[str, Any] = {}
-        for name in required_names:
-            data[name] = self._get_previous_item(variation, name, index)
+        
+        for name_idx, name in enumerate(required_names):
+            try:
+                data[name] = self._get_previous_item(variation, name, index)
+            except Exception as exc:
+                raise
 
         for name in optional_names:
             try:
                 data[name] = self._get_previous_item(variation, name, index)
             except Exception:
                 data[name] = None
-
+        
         concept = data[self.concept_name]
         detail_cfg = DetailCropGenerator._extract_detail_config(concept)
+        endpoint_override = None
 
-        if (not detail_cfg.get('enable_captioning', False)
-                or detail_cfg.get('caption_probability', 0.0) <= 0.0):
-            if data.get('detail_crop_type') != 'full':
+        enable_captioning = detail_cfg.get('enable_captioning', False)
+        caption_probability = detail_cfg.get('caption_probability', 0.0)
+
+        if (not enable_captioning or caption_probability <= 0.0):
+            crop_type_check = data.get('detail_crop_type')
+            if crop_type_check != 'full':
                 self._record_metric('disabled')
             # No caption produced; preserve original prompt and expose empty caption field
             data[caption_out_name] = ""
+            # Note: Blank captions are returned on-the-fly during training, no need to write files
             return self._finalize_output(data, detail_cfg)
 
         crop_type = data.get('detail_crop_type')
+        
         if crop_type == 'full':
             # Do not caption full-image crops by design
             data[caption_out_name] = ""
+            # Note: Blank captions are returned on-the-fly during training, no need to write files
             return self._finalize_output(data, detail_cfg)
 
         image_tensor: Optional[torch.Tensor] = data.get(self.image_name)
+        
         if image_tensor is None:
             data[caption_out_name] = ""
+            # Note: Blank captions are returned on-the-fly during training, no need to write files
             return self._finalize_output(data, detail_cfg)
 
         # During length calculation, skip actual captioning to avoid blocking
         if self._length_calculation_mode:
             data[caption_out_name] = ""
+            # Note: Blank captions are returned on-the-fly during training, no need to write files
             return self._finalize_output(data, detail_cfg)
-
+        
         caption_probability = max(0.0, min(1.0, detail_cfg.get('caption_probability', 0.0)))
         selection_value = self._deterministic_selection_value(data, detail_cfg)
+        
         if selection_value >= caption_probability:
             self._record_metric('skipped_probability')
             # Set both prompt and caption to empty string for uncaptioned crops
             data[self.prompt_name] = ""
             data[caption_out_name] = ""
+            # Note: Blank captions are returned on-the-fly during training, no need to write files
             return self._finalize_output(data, detail_cfg)
 
         cache_key = self._build_cache_key(data, detail_cfg)
-
         regenerate_each_epoch = detail_cfg.get('regenerate_each_epoch', False)
         caption = self._memory_cache.get(cache_key)
         
         # If pre-generation is complete, only use cached/disk captions, don't generate new ones
         if self._pregeneration_complete and caption is None:
-            caption = self._load_caption_file(data, detail_cfg)
-            if caption is not None:
+            # Load caption file with retry logic (handles race conditions)
+            try:
+                caption = self._load_caption_file(data, detail_cfg)
+            except Exception as exc:
+                # If loading fails, log but don't block - return empty caption
+                caption = None
+            
+            if caption is not None and caption != "":
                 caption = self._sanitize_caption(caption)
                 self._memory_cache[cache_key] = caption
                 self._record_metric('reused')
             else:
                 # Pre-generation already ran, don't generate during training
-                self._record_metric('skipped_probability')
+                # If caption file is missing or empty, return empty caption (blank caption on the fly for skipped crops)
+                caption = ""  # Blank caption on the fly for skipped crops
+                self._memory_cache[cache_key] = caption  # Cache blank caption to avoid repeated file checks
                 data[self.prompt_name] = ""
                 data[caption_out_name] = ""
                 return self._finalize_output(data, detail_cfg)
@@ -360,7 +524,7 @@ class CropCaptionGenerator(PipelineModule, RandomAccessPipelineModule):
                     self._memory_cache[cache_key] = caption
                     self._record_metric('reused')
                 else:
-                    caption = self._request_caption(image_tensor, data, detail_cfg)
+                    caption = self._request_caption(image_tensor, data, detail_cfg, endpoint_override=endpoint_override)
                     self._memory_cache[cache_key] = caption
                     self._write_caption_file(variation, data, detail_cfg, caption)
                     self._record_metric('captioned')
@@ -379,7 +543,7 @@ class CropCaptionGenerator(PipelineModule, RandomAccessPipelineModule):
                 self._memory_cache[cache_key] = caption
                 self._record_metric('reused')
         if caption is None:
-            caption = self._request_caption(image_tensor, data, detail_cfg)
+            caption = self._request_caption(image_tensor, data, detail_cfg, endpoint_override=endpoint_override)
             self._memory_cache[cache_key] = caption
             self._write_caption_file(variation, data, detail_cfg, caption)
             self._record_metric('captioned')
@@ -389,6 +553,56 @@ class CropCaptionGenerator(PipelineModule, RandomAccessPipelineModule):
         data[self.prompt_name] = caption
         data[caption_out_name] = caption
         return self._finalize_output(data, detail_cfg)
+
+
+    def _distributed_barrier(self, rank: int, label: str) -> None:
+        try:
+            from modules.util import multi_gpu_util as _multi  # type: ignore
+            world_size = int(getattr(_multi, "world_size")())
+            if world_size <= 1:
+                return
+            if not torch.distributed.is_initialized():
+                raise RuntimeError(f"Rank {rank}: torch.distributed not initialized for barrier '{label}'")
+            print(f"[Detail Captions] Rank {rank} waiting at {label} barrier...")
+            sys.stdout.flush()
+            torch.distributed.barrier()
+            print(f"[Detail Captions] Rank {rank} barrier {label} released")
+            sys.stdout.flush()
+        except Exception as exc:
+            print(f"[Detail Captions] Rank {rank} {label} barrier exception: {exc}")
+            traceback.print_exc()
+            sys.stdout.flush()
+            raise
+
+    def _distributed_status(self) -> Tuple[int, int, bool]:
+        rank = 0
+        world_size = 1
+        try:
+            from modules.util import multi_gpu_util as _multi  # type: ignore
+            world_size = int(getattr(_multi, "world_size")())
+            rank = int(getattr(_multi, "rank")())
+        except Exception:
+            pass
+        distributed_ready = False
+        try:
+            distributed_ready = torch.distributed.is_available() and torch.distributed.is_initialized()
+        except Exception:
+            distributed_ready = False
+        return rank, world_size, distributed_ready and world_size > 1
+
+    def _using_managed_servers(self) -> bool:
+        # External caption jobs own the Ollama lifecycle, so the in-process helper never manages servers.
+        return False
+
+    def _log_caption_heartbeat(self, rank: int, world_size: int, processed: int, total: int) -> None:
+        if total <= 0:
+            return
+        percent = int((processed / total) * 100)
+        print(
+            f"[Detail Captions] Rank {rank}/{world_size} progress: "
+            f"{processed}/{total} ({percent}%)"
+        )
+        sys.stdout.flush()
 
     @staticmethod
     def _deterministic_selection_value(data: Dict[str, Any], detail_cfg: dict) -> float:
@@ -435,15 +649,6 @@ class CropCaptionGenerator(PipelineModule, RandomAccessPipelineModule):
 
         try:
             # Show which rank is writing for debugging parallel execution
-            try:
-                from modules.util import multi_gpu_util as _multi
-                rank = int(getattr(_multi, "rank")())
-                world_size = int(getattr(_multi, "world_size")())
-                rank_label = f" [Rank {rank}/{world_size}]" if world_size > 1 else ""
-            except Exception:
-                rank_label = ""
-            
-            print(f"[Detail Captions Debug]{rank_label} Writing caption to: {caption_path}")
             with open(caption_path, "w", encoding="utf-8") as fh:
                 fh.write(caption)
         except Exception as exc:
@@ -455,19 +660,51 @@ class CropCaptionGenerator(PipelineModule, RandomAccessPipelineModule):
             detail_cfg: dict,
     ) -> Optional[str]:
         caption_path = self._caption_file_path(0, data, detail_cfg, create_dirs=False)
-        if not caption_path or not os.path.isfile(caption_path):
+        if not caption_path:
             return None
+        
+        # During training (pregeneration complete), missing files mean skipped crops - return blank caption immediately
+        # Only retry if pregeneration is not complete (files might still be written)
+        max_retries = 3 if not self._pregeneration_complete else 1
+        retry_delay = 0.1
+        
+        for attempt in range(max_retries):
+            try:
+                # Check if file exists
+                file_exists = os.path.isfile(caption_path)
+                
+                if not file_exists:
+                    # File doesn't exist - during training this means skipped crop, return blank caption immediately
+                    return ""  # Return blank caption immediately for skipped crops (generated on the fly)
 
-        try:
-            with open(caption_path, "r", encoding="utf-8") as fh:
-                contents = fh.read().strip()
-                if not contents:
-                    print(f"[Detail Captions] Caption file empty at {caption_path}")
+                # File exists, try to read it
+                try:
+                    with open(caption_path, "r", encoding="utf-8") as fh:
+                        contents = fh.read().strip()
+                        if not contents:
+                            # Empty file means blank caption (skipped crop)
+                            return ""  # Return empty string for blank captions
+                        return contents
+                except (IOError, OSError) as exc:
+                    # File might be locked or still being written, retry
+                    if attempt < max_retries - 1:
+                        time.sleep(retry_delay * (attempt + 1))
+                        continue
+                    else:
+                        # After max retries, return blank caption instead of None
+                        return ""  # Return blank caption instead of None
+                        
+            except Exception as exc:
+                if attempt < max_retries - 1:
+                    time.sleep(retry_delay * (attempt + 1))
+                    continue
+                else:
+                    print(f"[Detail Captions] Unexpected error loading caption file at {caption_path}: {exc}")
+                    traceback.print_exc()
+                    sys.stdout.flush()
                     return None
-                return contents
-        except Exception as exc:
-            print(f"[Detail Captions] Failed to read caption file at {caption_path}: {exc}")
-            return None
+        
+        return None
 
     @staticmethod
     def _encode_image(tensor: torch.Tensor) -> str:
@@ -485,8 +722,15 @@ class CropCaptionGenerator(PipelineModule, RandomAccessPipelineModule):
         image.save(buffer, format="PNG")
         return base64.b64encode(buffer.getvalue()).decode('utf-8')
 
-    def _request_caption(self, tensor: torch.Tensor, data: Dict[str, Any], detail_cfg: dict) -> str:
-        endpoint = detail_cfg.get('caption_endpoint') or "http://localhost:11434"
+    def _request_caption(
+            self,
+            tensor: torch.Tensor,
+            data: Dict[str, Any],
+            detail_cfg: dict,
+            *,
+            endpoint_override: Optional[str] = None,
+    ) -> str:
+        endpoint = endpoint_override or detail_cfg.get('caption_endpoint') or "http://localhost:11434"
         timeout = float(detail_cfg.get('caption_timeout', 120.0) or 120.0)
         max_retries = max(0, int(detail_cfg.get('caption_max_retries', 4) or 4))
         backoff = 5.0
@@ -554,9 +798,11 @@ class CropCaptionGenerator(PipelineModule, RandomAccessPipelineModule):
                 return self._sanitize_caption(raw_caption)
             except Exception as exc:
                 if isinstance(exc, requests.exceptions.Timeout):
-                    ollama_manager.ensure_running(force_restart=True)
+                    if not self._using_managed_servers():
+                        ollama_manager.ensure_running(force_restart=True)
                 elif self._should_attempt_restart(exc):
-                    ollama_manager.ensure_running()
+                    if not self._using_managed_servers():
+                        ollama_manager.ensure_running()
                 last_error = exc
                 attempt += 1
                 timeout = min(timeout + backoff, timeout * 2)
@@ -569,22 +815,31 @@ class CropCaptionGenerator(PipelineModule, RandomAccessPipelineModule):
         if model in self._models_pulled:
             return
 
-        # Only support local endpoints for auto pull
+        self._ensure_model_available_local(model, endpoint, timeout)
+
+    @staticmethod
+    def _debug_show_console() -> bool:
+        return True
+
+    def _ensure_model_available_local(self, model: str, endpoint: str, timeout: float) -> None:
+        if model in self._models_pulled:
+            return
+
         if not endpoint.startswith("http://localhost") and not endpoint.startswith("http://127.0.0.1"):
             raise RuntimeError(
                 f"Ollama model '{model}' not found at {endpoint} and auto-pull only works for local servers. "
                 f"Install the model manually or adjust the caption model setting."
             )
 
-        pull_command = ["ollama", "pull", model]
-        try:
-            subprocess.run(
-                pull_command,
-                check=True,
-                capture_output=True,
-                text=True,
+        def _pull(target_model: str) -> None:
+            self._run_cli_command(
+                ["ollama", "pull", target_model],
                 timeout=max(timeout * 2, 60.0),
+                check=True,
             )
+
+        try:
+            _pull(model)
             self._models_pulled.add(model)
             return
         except FileNotFoundError as exc:
@@ -595,22 +850,22 @@ class CropCaptionGenerator(PipelineModule, RandomAccessPipelineModule):
             raise RuntimeError(
                 f"Timed out while pulling Ollama model '{model}'. Try pulling it manually with 'ollama pull {model}'."
             ) from exc
-        except subprocess.CalledProcessError as exc:
+        except subprocess.CalledProcessError:
             pass  # fall through to fallback
 
         # fallback: query the manifest and pick the smallest matching model
         try:
-            list_proc = subprocess.run(
+            list_proc = self._run_cli_command(
                 ["ollama", "list"],
-                check=True,
-                capture_output=True,
-                text=True,
                 timeout=timeout,
+                check=True,
             )
-            available_names = self._parse_ollama_list(list_proc.stdout)
+            available_names = self._parse_ollama_list(list_proc.stdout or "")
         except Exception as exc:
+            stdout = getattr(exc, "stdout", "")
+            stderr = getattr(exc, "stderr", "")
             raise RuntimeError(
-                f"Failed to auto-pull Ollama model '{model}'. Command output:\n{exc.stdout if isinstance(exc, subprocess.CalledProcessError) else ''}\n{exc.stderr if isinstance(exc, subprocess.CalledProcessError) else ''}"
+                f"Failed to auto-pull Ollama model '{model}'. Command output:\n{stdout}\n{stderr}"
             ) from exc
 
         manifest_model = self._select_manifest_model(model, available_names)
@@ -620,13 +875,7 @@ class CropCaptionGenerator(PipelineModule, RandomAccessPipelineModule):
             )
 
         try:
-            subprocess.run(
-                ["ollama", "pull", manifest_model],
-                check=True,
-                capture_output=True,
-                text=True,
-                timeout=max(timeout * 2, 60.0),
-            )
+            _pull(manifest_model)
             self._models_pulled.add(manifest_model)
         except subprocess.CalledProcessError as exc:
             raise RuntimeError(
@@ -808,9 +1057,12 @@ class CropCaptionGenerator(PipelineModule, RandomAccessPipelineModule):
     def _advance_progress(self, detail_cfg: Optional[dict]):
         if self._progress_total <= 0 or self._progress_finalized:
             return
+        
         self._progress_count = min(self._progress_count + 1, self._progress_total)
         final = self._progress_count >= self._progress_total
+        
         self._print_progress(final=final)
+        
         if final:
             self._progress_finalized = True
             self._maybe_shutdown_ollama(detail_cfg)
@@ -818,19 +1070,16 @@ class CropCaptionGenerator(PipelineModule, RandomAccessPipelineModule):
     def _print_progress(self, final: bool = False):
         if self._progress_total <= 0:
             return
-        percent = int((self._progress_count * 100) / self._progress_total) if self._progress_total else 100
-        if percent != self._progress_last_percent or final:
-            sys.stdout.write(
-                f"\r{self._progress_prefix}: {self._progress_count}/{self._progress_total} ({percent}%)"
-            )
-            sys.stdout.flush()
-            self._progress_last_percent = percent
-        if final:
-            sys.stdout.write("\n")
-            sys.stdout.flush()
+        
+        # Only print progress if enabled, to reduce noise when acting as passthrough
+        if not self._caption_gpu_config.enabled: # Wait, caption_gpu_config is optional and about GPU
+             # We should check the concept config but we don't have it here easily without fetching upstream?
+             # But wait, _finalize_output passes detail_cfg.
+             pass
 
     def _finalize_output(self, data: Dict[str, Any], detail_cfg: dict) -> Dict[str, Any]:
-        self._advance_progress(detail_cfg)
+        if detail_cfg.get('enabled', False):
+             self._advance_progress(detail_cfg)
         return data
 
     # ------------------------------------------------------------------
@@ -899,7 +1148,8 @@ class CropCaptionGenerator(PipelineModule, RandomAccessPipelineModule):
         backoff = 2.0
         while attempt <= max_retries:
             try:
-                ollama_manager.ensure_running()
+                if not self._using_managed_servers():
+                    ollama_manager.ensure_running()
                 # Pass endpoint to _call_ollama_chat_with_timeout to use specific client host
                 response = self._call_ollama_chat_with_timeout(model, messages, options, timeout, endpoint=endpoint)
                 raw_caption = self._parse_ollama_response(response, is_thinking_model)
@@ -908,13 +1158,15 @@ class CropCaptionGenerator(PipelineModule, RandomAccessPipelineModule):
                 return self._sanitize_caption(raw_caption)
             except TimeoutError as exc:
                 last_error = exc
-                ollama_manager.ensure_running(force_restart=True)
+                if not self._using_managed_servers():
+                    ollama_manager.ensure_running(force_restart=True)
             except Exception as exc:
                 last_error = exc
                 message = str(exc).lower()
                 if "model" in message and "not found" in message:
                     raise
-                ollama_manager.ensure_running(force_restart=True)
+                if not self._using_managed_servers():
+                    ollama_manager.ensure_running(force_restart=True)
             attempt += 1
             time.sleep(backoff)
             backoff = min(backoff * 2, 30.0)
@@ -1012,16 +1264,30 @@ class CropCaptionGenerator(PipelineModule, RandomAccessPipelineModule):
         return cleaned
 
     def _maybe_shutdown_ollama(self, detail_cfg: Optional[dict]) -> None:
+        try:
+            rank, world_size, _ = self._distributed_status()
+            rank_label = f"[Rank {rank}/{world_size}]" if world_size > 1 else ""
+            print(f"[Detail Captions Debug]{rank_label} _maybe_shutdown_ollama: START, has_shutdown={self._has_shutdown_ollama}")
+            sys.stdout.flush()
+        except Exception:
+            pass
+        
         if self._has_shutdown_ollama:
             return
+        
         if not detail_cfg:
             return
+        
         if detail_cfg.get('regenerate_each_epoch', False):
             return
+        
         if not detail_cfg.get('enable_captioning', False):
             return
-        ollama_manager.cleanup()
-        self._has_shutdown_ollama = True
+        
+        try:
+            ollama_manager.cleanup()
+        finally:
+            self._has_shutdown_ollama = True
 
 
 class _DefaultDict(dict):
