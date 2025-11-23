@@ -410,7 +410,16 @@ class CropCaptionGenerator(PipelineModule, RandomAccessPipelineModule):
             return
 
         try:
-            print(f"[Detail Captions Debug] Writing caption to: {caption_path}")
+            # Show which rank is writing for debugging parallel execution
+            try:
+                from modules.util import multi_gpu_util as _multi
+                rank = int(getattr(_multi, "rank")())
+                world_size = int(getattr(_multi, "world_size")())
+                rank_label = f" [Rank {rank}/{world_size}]" if world_size > 1 else ""
+            except Exception:
+                rank_label = ""
+            
+            print(f"[Detail Captions Debug]{rank_label} Writing caption to: {caption_path}")
             with open(caption_path, "w", encoding="utf-8") as fh:
                 fh.write(caption)
         except Exception as exc:
