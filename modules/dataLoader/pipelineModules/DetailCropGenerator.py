@@ -136,6 +136,52 @@ class DetailCropGenerator(PipelineModule, RandomAccessPipelineModule):
     def start(self, variation: int):
         super().clear_item_cache()
         self._init_internal_state()
+        
+        # Determine distributed context for optimized crop sharing
+        try:
+            import torch
+            from modules.util import multi_gpu_util as _multi
+            world_size = int(getattr(_multi, "world_size")())
+            rank = int(getattr(_multi, "rank")())
+            is_distributed = world_size > 1
+        except Exception:
+            world_size, rank, is_distributed = 1, 0, False
+        
+        # In multi-GPU mode, Rank 0 generates and saves crops, other ranks load from cache
+        # This avoids redundant generation on every rank
+        cache_file_path = None
+        if is_distributed:
+            import os
+            import pickle
+            cache_dir = os.path.join(os.getcwd(), "workspace-cache", "detail_crops_cache")
+            os.makedirs(cache_dir, exist_ok=True)
+            cache_file_path = os.path.join(cache_dir, f"crops_epoch_{variation}.pkl")
+            
+            if rank != 0:
+                # Worker ranks: Wait for master to finish, then load crops from cache
+                print(f"[Detail Crops] Rank {rank} waiting for master to generate crops...")
+                sys.stdout.flush()
+                torch.distributed.barrier()
+                
+                if os.path.exists(cache_file_path):
+                    print(f"[Detail Crops] Rank {rank} loading crops from cache...")
+                    sys.stdout.flush()
+                    with open(cache_file_path, 'rb') as f:
+                        cached_data = pickle.load(f)
+                        self._entries = cached_data['entries']
+                        self._entries_by_base = cached_data['entries_by_base']
+                        self._scale_remaining = cached_data['scale_remaining']
+                    print(f"[Detail Crops] Rank {rank} loaded {len(self._entries)} crops from cache")
+                    sys.stdout.flush()
+                    torch.distributed.barrier()
+                    return
+                else:
+                    print(f"[Detail Crops] Rank {rank} ERROR: cache file not found at {cache_file_path}")
+                    sys.stdout.flush()
+                    torch.distributed.barrier()
+                    raise RuntimeError(f"Detail crops cache file missing for Rank {rank}")
+        
+        # Master rank (or single-GPU): Generate crops normally
         try:
             # Use image_path length to avoid triggering image decoding during length probing
             base_length = self._get_previous_length(self.image_path_name)
@@ -267,6 +313,23 @@ class DetailCropGenerator(PipelineModule, RandomAccessPipelineModule):
                 self._increment_progress()
 
         self._entries = new_entries
+        
+        # In distributed mode, save crops to cache so other ranks can load them
+        if is_distributed and rank == 0 and cache_file_path:
+            print(f"[Detail Crops] Rank 0 saving {len(self._entries)} crops to cache...")
+            sys.stdout.flush()
+            cached_data = {
+                'entries': self._entries,
+                'entries_by_base': self._entries_by_base,
+                'scale_remaining': self._scale_remaining,
+            }
+            import pickle
+            with open(cache_file_path, 'wb') as f:
+                pickle.dump(cached_data, f)
+            print(f"[Detail Crops] Rank 0 saved crops cache, releasing barrier")
+            sys.stdout.flush()
+            torch.distributed.barrier()  # Release waiting ranks
+        
         if any_crops_enabled:
             self._finalize_progress()
         
