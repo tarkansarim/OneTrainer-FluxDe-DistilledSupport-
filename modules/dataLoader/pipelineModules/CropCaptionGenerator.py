@@ -134,6 +134,19 @@ class CropCaptionGenerator(PipelineModule, RandomAccessPipelineModule):
                     prob_pct = int(detail_cfg.get('caption_probability', 0.0) * 100)
                     print(f"[Detail Captions] Rank {rank}/{world_size} generating captions for epoch {variation} (~{prob_pct}% of {len(my_shard_indices)} crops)...")
                     sys.stdout.flush()
+                    
+                    # Barrier at START: Ensure all ranks are ready before ANY rank starts Ollama/captioning
+                    # This breaks out of the master_first() sequential execution and allows true parallelism
+                    try:
+                        from modules.util import multi_gpu_util as _multi
+                        if int(getattr(_multi, "world_size")()) > 1:
+                            print(f"[Detail Captions] Rank {rank} syncing before starting Ollama servers...")
+                            sys.stdout.flush()
+                            torch.distributed.barrier()
+                            print(f"[Detail Captions] Rank {rank} barrier released, starting Ollama in parallel with other ranks")
+                            sys.stdout.flush()
+                    except Exception:
+                        pass
 
                     # Start per-rank Ollama instance
                     # Use a unique port per rank to avoid collisions (default 11434, 11435, etc)
