@@ -201,10 +201,12 @@ class CropCaptionGenerator(PipelineModule, RandomAccessPipelineModule):
                     sys.stdout.flush()
                     self._pregeneration_complete = True
         except Exception as e:
-            print(f"[Detail Captions] Error during pre-generation: {e}")
+            # If captioning fails, we MUST crash immediately to prevent training with broken data.
+            # Do NOT set _pregeneration_complete or suppress the error.
+            print(f"[Detail Captions] FATAL ERROR during pre-generation: {e}")
             traceback.print_exc()
             sys.stdout.flush()
-            self._pregeneration_complete = True  # Set flag even on error to prevent infinite retries
+            raise  # Re-raise to abort training
 
     def get_item(self, variation: int, index: int, requested_name: str = None) -> Dict[str, Any]:
         # Compute caption output name (may be called before __init__ completes)
