@@ -215,13 +215,28 @@ class CropCaptionGenerator(PipelineModule, RandomAccessPipelineModule):
                     try:
                         from modules.util import multi_gpu_util as _multi
                         if int(getattr(_multi, "world_size")()) > 1:
-                            print(f"[Detail Captions] Rank {rank} waiting at barrier for other ranks to finish...")
+                            print(f"[Detail Captions] Rank {rank} waiting at END barrier for other ranks to finish...")
                             sys.stdout.flush()
-                            torch.distributed.barrier()
-                            print(f"[Detail Captions] Rank {rank} barrier released, all ranks finished captioning")
+                            
+                            # Use all_reduce to verify all ranks actually reached this point
+                            completion_signal = torch.tensor([1], dtype=torch.int32, device='cuda')
+                            torch.distributed.all_reduce(completion_signal, op=torch.distributed.ReduceOp.SUM)
+                            expected_sum = int(getattr(_multi, "world_size")())
+                            
+                            if completion_signal.item() != expected_sum:
+                                raise RuntimeError(
+                                    f"Rank {rank} END barrier check FAILED: "
+                                    f"Expected {expected_sum} ranks to complete captioning, got {completion_signal.item()}. "
+                                    f"One or more ranks failed to caption their share!"
+                                )
+                            
+                            print(f"[Detail Captions] Rank {rank} END barrier released, all {expected_sum} ranks finished captioning")
                             sys.stdout.flush()
-                    except Exception:
-                        pass
+                    except Exception as barrier_exc:
+                        print(f"[Detail Captions] Rank {rank} END barrier FATAL ERROR: {barrier_exc}")
+                        traceback.print_exc()
+                        sys.stdout.flush()
+                        raise
         except Exception as e:
             # If captioning fails, we MUST crash immediately to prevent training with broken data.
             # Do NOT set _pregeneration_complete or suppress the error.
