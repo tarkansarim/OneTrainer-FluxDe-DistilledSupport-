@@ -167,12 +167,12 @@ class CropCaptionGenerator(PipelineModule, RandomAccessPipelineModule):
                     # We need to update detail_cfg to point to our private port for _request_caption calls
                     detail_cfg['caption_endpoint'] = my_endpoint
 
-                    with suppress(Exception):
-                        self._ensure_model_available(
-                            detail_cfg.get('caption_model') or "qwen2.5vl:3b",
-                            my_endpoint,
-                            float(detail_cfg.get('caption_timeout', 120.0) or 120.0),
-                        )
+                    # Ensure model exists - NO FALLBACK, must succeed or crash
+                    self._ensure_model_available(
+                        detail_cfg.get('caption_model') or "qwen2.5vl:3b",
+                        my_endpoint,
+                        float(detail_cfg.get('caption_timeout', 120.0) or 120.0),
+                    )
 
                     # Pre-generate captions for MY shard items
                     caption_out_name = f"{self.prompt_name}_caption" if hasattr(self, 'prompt_name') else "prompt_caption"
@@ -496,11 +496,9 @@ class CropCaptionGenerator(PipelineModule, RandomAccessPipelineModule):
                 return self._sanitize_caption(raw_caption)
             except Exception as exc:
                 if isinstance(exc, requests.exceptions.Timeout):
-                    with suppress(Exception):
-                        ollama_manager.ensure_running(force_restart=True)
+                    ollama_manager.ensure_running(force_restart=True)
                 elif self._should_attempt_restart(exc):
-                    with suppress(Exception):
-                        ollama_manager.ensure_running()
+                    ollama_manager.ensure_running()
                 last_error = exc
                 attempt += 1
                 timeout = min(timeout + backoff, timeout * 2)
@@ -852,15 +850,13 @@ class CropCaptionGenerator(PipelineModule, RandomAccessPipelineModule):
                 return self._sanitize_caption(raw_caption)
             except TimeoutError as exc:
                 last_error = exc
-                with suppress(Exception):
-                    ollama_manager.ensure_running(force_restart=True)
+                ollama_manager.ensure_running(force_restart=True)
             except Exception as exc:
                 last_error = exc
                 message = str(exc).lower()
                 if "model" in message and "not found" in message:
                     raise
-                with suppress(Exception):
-                    ollama_manager.ensure_running(force_restart=True)
+                ollama_manager.ensure_running(force_restart=True)
             attempt += 1
             time.sleep(backoff)
             backoff = min(backoff * 2, 30.0)
@@ -966,8 +962,7 @@ class CropCaptionGenerator(PipelineModule, RandomAccessPipelineModule):
             return
         if not detail_cfg.get('enable_captioning', False):
             return
-        with suppress(Exception):
-            ollama_manager.cleanup()
+        ollama_manager.cleanup()
         self._has_shutdown_ollama = True
 
 
