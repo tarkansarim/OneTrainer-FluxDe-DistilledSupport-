@@ -159,7 +159,8 @@ class CropCaptionGenerator(PipelineModule, RandomAccessPipelineModule):
                     )
 
                     # Ensure model exists locally on this rank's server
-                    my_endpoint = f"http://localhost:{my_port}"
+                    # Use 127.0.0.1 to avoid localhost IPv6 resolution issues on Windows
+                    my_endpoint = f"http://127.0.0.1:{my_port}"
                     # Override the config endpoint for this session to force using our private server
                     # We cheat a bit by mutating the dict for this method scope, or passing it explicitly
                     
