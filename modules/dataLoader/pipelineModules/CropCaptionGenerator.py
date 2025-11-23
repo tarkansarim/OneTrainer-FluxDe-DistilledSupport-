@@ -144,6 +144,14 @@ class CropCaptionGenerator(PipelineModule, RandomAccessPipelineModule):
                             if not torch.distributed.is_initialized():
                                 raise RuntimeError(f"Rank {rank}: torch.distributed not initialized when trying to barrier!")
                             
+                            # Test if ranks can communicate with a simple all_reduce
+                            test_tensor = torch.tensor([rank], dtype=torch.int32, device='cuda')
+                            print(f"[Detail Captions] Rank {rank} testing communication with all_reduce...")
+                            sys.stdout.flush()
+                            torch.distributed.all_reduce(test_tensor, op=torch.distributed.ReduceOp.SUM)
+                            print(f"[Detail Captions] Rank {rank} all_reduce result: {test_tensor.item()} (expected sum of ranks)")
+                            sys.stdout.flush()
+                            
                             print(f"[Detail Captions] Rank {rank} syncing before starting Ollama servers...")
                             sys.stdout.flush()
                             torch.distributed.barrier()
