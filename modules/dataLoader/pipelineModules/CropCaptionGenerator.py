@@ -145,25 +145,22 @@ class CropCaptionGenerator(PipelineModule, RandomAccessPipelineModule):
                             torch.distributed.barrier()
                             print(f"[Detail Captions] Rank {rank} barrier released, starting Ollama in parallel with other ranks")
                             sys.stdout.flush()
-                    except Exception:
-                        pass
+                    except Exception as barrier_exc:
+                        print(f"[Detail Captions] Rank {rank} barrier exception: {barrier_exc}")
+                        traceback.print_exc()
+                        sys.stdout.flush()
+                        raise
 
                     # Start per-rank Ollama instance
                     # Use a unique port per rank to avoid collisions (default 11434, 11435, etc)
                     my_port = 11434 + rank
                     # Use only THIS rank's GPU index if we are in a distributed setting
                     # Assuming 'rank' maps 1:1 to visible device index in standard DDP
-                    my_device_index = str(rank) 
+                    my_device_index = str(rank)
                     
-                    # If we are running locally single-gpu, rank is 0, device is whatever was passed or default.
-                    # But if world_size > 1, we enforce strict binding.
+                    print(f"[Detail Captions] Rank {rank} about to start Ollama on port {my_port} with GPU {my_device_index}")
+                    sys.stdout.flush()
                     
-                    # Note: We must ensure we don't conflict with the global 'ollama_manager' state 
-                    # if multiple threads were sharing it, but here we are in separate processes (DDP).
-                    # Each process has its own 'ollama_manager' module instance.
-                    
-                    # REMOVED suppress(Exception) to debug why Rank 1 fails to start
-                    # with suppress(Exception):
                     ollama_manager.prepare(
                         train_device="cuda",
                         device_indexes=my_device_index,
