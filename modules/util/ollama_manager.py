@@ -49,6 +49,13 @@ def prepare(train_device: str, device_indexes: str, multi_gpu: bool):
         else:
             env["CUDA_VISIBLE_DEVICES"] = device_index
             print(f"[Ollama] Restarting ollama serve with CUDA_VISIBLE_DEVICES={env['CUDA_VISIBLE_DEVICES']}")
+        
+        # Set OLLAMA_NUM_PARALLEL if provided via env var from caller, or default
+        # This allows parallel captioning workers to actually run in parallel
+        if "OLLAMA_NUM_PARALLEL" not in env:
+            # Default to 4 if not specified, to allow some parallelism by default
+            env["OLLAMA_NUM_PARALLEL"] = "4"
+            
         _state.last_device_index = device_index
         _state.last_env = env
         _launch_ollama_process(env)

@@ -44,12 +44,14 @@ class CropCaptionGenerator(PipelineModule, RandomAccessPipelineModule):
             prompt_name: str,
             image_path_name: str,
             additional_passthrough: Optional[Iterable[str]] = None,
+            parallel_workers: int = 0,
     ):
         self.image_name = image_name
         self.concept_name = concept_name
         self.prompt_name = prompt_name
         self.image_path_name = image_path_name
         self.additional_passthrough = tuple(sorted(set(additional_passthrough or [])))
+        self.parallel_workers = parallel_workers
         super().__init__()
 
         self._memory_cache: Dict[str, str] = {}
@@ -139,13 +141,28 @@ class CropCaptionGenerator(PipelineModule, RandomAccessPipelineModule):
 
                     # Pre-generate captions for all items
                     caption_out_name = f"{self.prompt_name}_caption" if hasattr(self, 'prompt_name') else "prompt_caption"
-                    for index in range(total):
+                    
+                    # Helper function for generating a single caption
+                    def _generate_one(idx):
                         try:
-                            # Trigger caption generation by requesting the caption output
-                            self.get_item(variation, index, caption_out_name)
+                            self.get_item(variation, idx, caption_out_name)
                         except Exception as e:
-                            print(f"[Detail Captions] Error pre-generating caption for item {index}: {e}")
+                            print(f"[Detail Captions] Error pre-generating caption for item {idx}: {e}")
                             sys.stdout.flush()
+
+                    if self.parallel_workers > 1:
+                        from concurrent.futures import ThreadPoolExecutor, as_completed
+                        # Use ThreadPoolExecutor for parallel captioning
+                        print(f"[Detail Captions] Using {self.parallel_workers} parallel workers")
+                        with ThreadPoolExecutor(max_workers=self.parallel_workers) as executor:
+                            futures = [executor.submit(_generate_one, i) for i in range(total)]
+                            for future in as_completed(futures):
+                                # Just consuming results to ensure exceptions are caught or logged if needed
+                                pass
+                    else:
+                        # Sequential generation
+                        for index in range(total):
+                            _generate_one(index)
 
                     print(f"[Detail Captions] Pre-generation complete. Metrics: {self._metrics}")
                     sys.stdout.flush()
