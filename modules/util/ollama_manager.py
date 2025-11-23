@@ -34,19 +34,23 @@ def prepare(train_device: str, device_indexes: str, multi_gpu: bool, port: int =
         return
 
     try:
+        # In distributed/parallel mode, we must NOT kill global Ollama processes,
+        # otherwise ranks will kill each other's servers.
+        # We rely on Popen to manage our own specific child process.
+        # If the port is already taken by a zombie, we might fail to bind or reuse it.
+        
         if system == "windows":
-            _state.service_was_running = _stop_windows_service()
-            _kill_ollama_processes_windows()
-        else:
-            # On remote/linux with multiple ranks, we don't want to kill other ranks' ollama processes
-            # Only kill if we are taking over the default port or cleaning up?
-            # For distributed captioning, each rank manages its own process.
-            # Killing 'ollama' blindly by name will kill everyone's server!
-            # We should rely on Popen to manage our specific child process.
-            # However, if there's a zombie process on our port, we might fail to bind.
-            # For now, we skip global kill on linux if using non-default port? 
-            # Or trust that train_remote isolates environments? No, same pod.
+            # Only stop the service if we are strictly using the default port AND 
+            # we suspect conflict? For now, disable global kills to allow multi-GPU.
             pass 
+            # _state.service_was_running = _stop_windows_service()
+            # _kill_ollama_processes_windows()
+        else:
+            pass
+            # _kill_ollama_processes_posix()
+
+        # Ensure no other Ollama servers are running that might block the port
+        # _kill_ollama_processes_windows() if system == "windows" else _kill_ollama_processes_posix()
 
         env = os.environ.copy()
         env["OLLAMA_HOST"] = f"127.0.0.1:{port}"
