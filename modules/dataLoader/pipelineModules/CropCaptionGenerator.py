@@ -179,12 +179,10 @@ class CropCaptionGenerator(PipelineModule, RandomAccessPipelineModule):
                     
                     # Helper function for generating a single caption
                     def _generate_one(idx):
-                        try:
-                            # get_item calls _request_caption, which uses detail_cfg['caption_endpoint']
-                            self.get_item(variation, idx, caption_out_name)
-                        except Exception as e:
-                            print(f"[Detail Captions] Rank {rank} error pre-generating caption for item {idx}: {e}")
-                            sys.stdout.flush()
+                        # We allow get_item to raise exceptions directly.
+                        # If any caption fails, we want the whole process to crash immediately
+                        # so we don't proceed to caching with missing data.
+                        self.get_item(variation, idx, caption_out_name)
 
                     # Even within a rank, we can use threads if we want concurrency against our private server
                     if self.parallel_workers > 1:
@@ -193,7 +191,8 @@ class CropCaptionGenerator(PipelineModule, RandomAccessPipelineModule):
                         with ThreadPoolExecutor(max_workers=self.parallel_workers) as executor:
                             futures = [executor.submit(_generate_one, i) for i in my_shard_indices]
                             for future in as_completed(futures):
-                                pass
+                                # Check result to raise any exception that occurred in the thread
+                                future.result()
                     else:
                         for index in my_shard_indices:
                             _generate_one(index)
