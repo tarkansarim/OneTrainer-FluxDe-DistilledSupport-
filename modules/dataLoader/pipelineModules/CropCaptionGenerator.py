@@ -443,7 +443,7 @@ class CropCaptionGenerator(PipelineModule, RandomAccessPipelineModule):
         array = tensor_cpu.mul(255).to(dtype=torch.uint8).permute(1, 2, 0).contiguous().numpy()
         image = Image.fromarray(array)
 
-        max_side = 768
+        max_side = 512
         if max(image.size) > max_side:
             resample_attr = getattr(Image, "Resampling", Image)
             image.thumbnail((max_side, max_side), resample_attr.LANCZOS)
