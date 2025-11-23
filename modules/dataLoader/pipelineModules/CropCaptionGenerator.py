@@ -149,13 +149,14 @@ class CropCaptionGenerator(PipelineModule, RandomAccessPipelineModule):
                     # if multiple threads were sharing it, but here we are in separate processes (DDP).
                     # Each process has its own 'ollama_manager' module instance.
                     
-                    with suppress(Exception):
-                        ollama_manager.prepare(
-                            train_device="cuda",
-                            device_indexes=my_device_index,
-                            multi_gpu=False, # Treat as single-GPU instance for this specific server
-                            port=my_port
-                        )
+                    # REMOVED suppress(Exception) to debug why Rank 1 fails to start
+                    # with suppress(Exception):
+                    ollama_manager.prepare(
+                        train_device="cuda",
+                        device_indexes=my_device_index,
+                        multi_gpu=False, # Treat as single-GPU instance for this specific server
+                        port=my_port
+                    )
 
                     # Ensure model exists locally on this rank's server
                     my_endpoint = f"http://localhost:{my_port}"
