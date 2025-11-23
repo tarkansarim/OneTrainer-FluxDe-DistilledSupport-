@@ -803,35 +803,14 @@ class TrainUI(ctk.CTk):
             )
 
             try:
-                # If cloud training is enabled, use the cloud tab's device settings for local Ollama restart.
-                # This ensures the log message reflects the intended cloud configuration (e.g. multi-GPU).
-                if train_config.cloud.enabled:
-                    # Fetch cloud-specific multi-gpu settings
-                    # Note: train_config.cloud.device_indexes might be empty string for "all"
-                    # train_config.cloud.multi_gpu is boolean
-                    
-                    cloud_device_indexes = getattr(train_config.cloud, "device_indexes", "")
-                    
-                    # If cloud.multi_gpu is enabled but no indexes specified, we want to imply "All".
-                    # However, ollama_manager.prepare expects exact indexes or it defaults to 0.
-                    # If device_indexes is empty here, we should probably generate a string "0,1,2..." 
-                    # based on cloud.gpu_count to make the log look correct, 
-                    # OR trust our update to ollama_manager to handle empty+multi_gpu as "ALL".
-                    
-                    # Since we updated ollama_manager to handle (multi_gpu=True, indexes="") as "ALL",
-                    # we just pass the cloud config values directly.
-                    
-                    ollama_manager.prepare(
-                        "cuda", 
-                        cloud_device_indexes,
-                        bool(getattr(train_config.cloud, "multi_gpu", False)),
-                    )
-                else:
-                    ollama_manager.prepare(
-                        train_config.train_device,
-                        getattr(train_config, "device_indexes", ""),
-                        bool(getattr(train_config, "multi_gpu", False)),
-                    )
+                # If cloud training is enabled, skip local Ollama restart entirely.
+                # The remote script (train_remote.py) handles starting Ollama on the cloud pod.
+                if not train_config.cloud.enabled:
+                ollama_manager.prepare(
+                    train_config.train_device,
+                    getattr(train_config, "device_indexes", ""),
+                    bool(getattr(train_config, "multi_gpu", False)),
+                )
             except Exception as exc:
                 traceback.print_exc()
                 self.on_update_status(f"Warning: failed to restart Ollama with training GPU ({exc})")
