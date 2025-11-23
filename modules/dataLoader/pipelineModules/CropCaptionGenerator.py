@@ -878,7 +878,12 @@ class CropCaptionGenerator(PipelineModule, RandomAccessPipelineModule):
 
         def _invoke():
             # Use Client to support custom host/port safely
-            client = _OLLAMA_MODULE.Client(host=endpoint) if endpoint else _OLLAMA_MODULE
+            # ollama.Client expects host in format "127.0.0.1:port" (no http:// prefix)
+            if endpoint:
+                host = endpoint.replace("http://", "").replace("https://", "")
+                client = _OLLAMA_MODULE.Client(host=host)
+            else:
+                client = _OLLAMA_MODULE
             return client.chat(
                 model=model,
                 messages=messages,
