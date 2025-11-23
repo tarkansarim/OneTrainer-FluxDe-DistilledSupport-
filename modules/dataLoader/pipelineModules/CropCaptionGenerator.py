@@ -140,13 +140,17 @@ class CropCaptionGenerator(PipelineModule, RandomAccessPipelineModule):
                     try:
                         from modules.util import multi_gpu_util as _multi
                         if int(getattr(_multi, "world_size")()) > 1:
+                            # Verify distributed is actually initialized before calling barrier
+                            if not torch.distributed.is_initialized():
+                                raise RuntimeError(f"Rank {rank}: torch.distributed not initialized when trying to barrier!")
+                            
                             print(f"[Detail Captions] Rank {rank} syncing before starting Ollama servers...")
                             sys.stdout.flush()
                             torch.distributed.barrier()
                             print(f"[Detail Captions] Rank {rank} barrier released, starting Ollama in parallel with other ranks")
                             sys.stdout.flush()
                     except Exception as barrier_exc:
-                        print(f"[Detail Captions] Rank {rank} barrier exception: {barrier_exc}")
+                        print(f"[Detail Captions] Rank {rank} START barrier exception: {barrier_exc}")
                         traceback.print_exc()
                         sys.stdout.flush()
                         raise
