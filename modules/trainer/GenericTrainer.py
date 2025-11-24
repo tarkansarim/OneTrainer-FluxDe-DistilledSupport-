@@ -932,9 +932,12 @@ class GenericTrainer(BaseTrainer):
                     torch.distributed.barrier()
                 
                 # Now start caption module (captions depend on crops being populated)
+                # Force restart even if previously started (it may have returned early during approximate_length)
                 for module in loading_pipeline.modules:
                     if isinstance(module, CropCaptionGenerator):
-                        if isinstance(module, RandomAccessPipelineModule) and not module.started:
+                        if isinstance(module, RandomAccessPipelineModule):
+                            # Reset started flag to allow restart after crops are ready
+                            module.started = False
                             module.start(next_epoch)
                             module.started = True
                 
