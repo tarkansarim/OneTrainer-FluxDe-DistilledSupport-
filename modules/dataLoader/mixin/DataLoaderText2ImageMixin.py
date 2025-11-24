@@ -193,18 +193,32 @@ class DataLoaderText2ImageMixin:
         return CaptionGPUConfig(enabled=True, device_indices=device_indexes, base_port=12134)
 
     def _resolve_caption_device_indexes(self, config: TrainConfig) -> List[int]:
-        # Check cloud config first (for cloud training)
+        # Priority 1: Check cloud config settings (cloud tab settings take precedence)
+        # Even if cloud.enabled=False on remote, cloud.multi_gpu and cloud.device_indexes
+        # should be used if they exist, as they represent cloud-specific multi-GPU settings
         cloud = getattr(config, "cloud", None)
-        if cloud and getattr(cloud, "enabled", False) and getattr(cloud, "multi_gpu", False):
-            indexes = self._parse_device_index_string(getattr(cloud, "device_indexes", ""))
-            if indexes:
-                return indexes
-            gpu_count = int(getattr(cloud, "gpu_count", 0) or 0)
-            if gpu_count > 1:
-                return list(range(gpu_count))
+        if cloud:
+            # Check cloud multi_gpu setting first (cloud tab isolated settings)
+            if getattr(cloud, "multi_gpu", False):
+                indexes = self._parse_device_index_string(getattr(cloud, "device_indexes", ""))
+                if indexes:
+                    return indexes
+                gpu_count = int(getattr(cloud, "gpu_count", 0) or 0)
+                if gpu_count > 1:
+                    return list(range(gpu_count))
+                # If cloud multi_gpu is True but no explicit indexes/count, detect GPUs
+                try:
+                    import torch
+                    if torch.cuda.is_available():
+                        gpu_count = torch.cuda.device_count()
+                        if gpu_count > 1:
+                            return list(range(gpu_count))
+                except Exception:
+                    pass
         
-        # Also check regular multi_gpu config (for remote training where cloud.enabled=False)
-        # This handles the case where training is on cloud but config.cloud.enabled is False on remote
+        # Priority 2: Check regular multi_gpu config (for non-cloud training or fallback)
+        # Note: For cloud training, config.multi_gpu should already be set from cloud.multi_gpu
+        # by CloudTrainer.__make_remote_config(), so this acts as a fallback
         if getattr(config, "multi_gpu", False):
             indexes = self._parse_device_index_string(getattr(config, "device_indexes", ""))
             if indexes:
@@ -219,8 +233,8 @@ class DataLoaderText2ImageMixin:
             except Exception:
                 pass
         
-        # Fallback to device_indexes from config
-        return self._parse_device_index_string(getattr(config, "device_indexes", ""))
+        # Fallback: single GPU (index 0)
+        return [0]
 
     @staticmethod
     def _parse_device_index_string(value: Optional[str]) -> List[int]:
