@@ -102,10 +102,16 @@ class DetailCropGenerator(PipelineModule, RandomAccessPipelineModule):
 
     def length(self) -> int:
         # If entries haven't been populated yet (start() not called), populate them now
+        # Use the pipeline's current epoch/variation instead of hardcoding 0
         if not self._entries:
-            print(f"[Detail Crops] length() called with no entries, calling start(0) to populate...")
+            # Try to get current variation from pipeline context
+            try:
+                current_variation = self.pipeline._LoadingPipeline__current_epoch
+            except (AttributeError, KeyError):
+                current_variation = 0
+            print(f"[Detail Crops] length() called with no entries, calling start({current_variation}) to populate...")
             sys.stdout.flush()
-            self.start(0)  # Use variation 0 for length calculation
+            self.start(current_variation)
         result = len(self._entries)
         print(f"[Detail Crops] length() returning {result} entries")
         sys.stdout.flush()

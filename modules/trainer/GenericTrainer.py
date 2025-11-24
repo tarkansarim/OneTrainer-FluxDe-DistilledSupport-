@@ -944,14 +944,20 @@ class GenericTrainer(BaseTrainer):
                 # Crop/caption modules have internal barriers, so all ranks are synchronized here
                 
                 # Step 2: Now switch to native OneTrainer behavior for latent caching (sequential/master_first)
-                # We already incremented the epoch, so decrement it so start_next_epoch() can increment it again
+                # We already incremented the epoch and started crop/caption modules.
+                # start_next_epoch() will increment again, but that's okay - it checks if modules are already started.
+                # However, we need to decrement the epoch so start_next_epoch() increments to the correct value.
+                # But CropCaptionGenerator.length() uses the pipeline's current epoch, so we need to ensure
+                # it queries with the correct variation. The barrier in CropCaptionGenerator.start() should
+                # ensure DetailCropGenerator has finished, and we're calling start() with next_epoch=1,
+                # so the pipeline epoch should be 1 at that point.
                 loading_pipeline._LoadingPipeline__current_epoch -= 1
                 
                 for _ in multi.master_first():
                     if self.config.latent_caching:
                         try:
                             # start_next_epoch() will:
-                            # 1. Increment epoch (to the correct value)
+                            # 1. Increment epoch (back to 1, which is correct for epoch 0)
                             # 2. Skip already-started modules (crops/captions)  
                             # 3. Start latent cache modules sequentially (master rank only)
                             self.data_loader.get_data_set().start_next_epoch()

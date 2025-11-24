@@ -119,16 +119,36 @@ class CropCaptionGenerator(PipelineModule, RandomAccessPipelineModule):
             "detail_crop_coords",
         )
 
+        # Use current variation if set, otherwise try variation 0
+        variation = getattr(self, '_current_variation', 0)
+        
         for field in detail_length_fields:
             with suppress(Exception):
+                # Try current variation first
                 detail_length = self._get_previous_length(field)
                 if detail_length > 0:
+                    print(f"[Detail Captions] length() found {detail_length} crops via {field} at variation {variation}")
+                    sys.stdout.flush()
                     return detail_length
+                # If current variation returns 0, try variation 0 (might be called during approximate_length)
+                if variation != 0:
+                    try:
+                        detail_length = self._get_previous_length(field, variation=0)
+                        if detail_length > 0:
+                            print(f"[Detail Captions] length() found {detail_length} crops via {field} at variation 0 (fallback)")
+                            sys.stdout.flush()
+                            return detail_length
+                    except Exception:
+                        pass
 
         # Fall back to prompt length so non-detail mode still works
         with suppress(Exception):
-            return self._get_previous_length(self.prompt_name)
+            prompt_length = self._get_previous_length(self.prompt_name)
+            if prompt_length > 0:
+                return prompt_length
 
+        print(f"[Detail Captions] length() returning 0 (no crops found at variation {variation})")
+        sys.stdout.flush()
         return 0
 
     def get_inputs(self) -> List[str]:
