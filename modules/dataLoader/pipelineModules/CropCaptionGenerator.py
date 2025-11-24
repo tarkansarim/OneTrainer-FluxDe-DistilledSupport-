@@ -397,6 +397,8 @@ class CropCaptionGenerator(PipelineModule, RandomAccessPipelineModule):
         print(f"[Detail Captions] Python executable: {sys.executable}", flush=True)
         
         with open(log_path, "w", encoding="utf-8") as log_file:
+            env = os.environ.copy()
+            env["PYTHONUNBUFFERED"] = "1"
             process = subprocess.Popen(
                 cmd,
                 stdout=subprocess.PIPE,
@@ -405,6 +407,7 @@ class CropCaptionGenerator(PipelineModule, RandomAccessPipelineModule):
                 text=True,
                 encoding="utf-8",
                 errors="replace",
+                env=env,
             )
             # Check if process started successfully
             if process.poll() is not None:

@@ -7,27 +7,52 @@ and processes each GPU's batch in its own cmd window. All noisy logging stays in
 windows or the per-run log file so the main OneTrainer console stays quiet.
 """
 
+import sys
+import os
+
+# Immediate logging before any other imports to catch early failures
+print(f"[CaptionJob] Script starting - PID: {os.getpid()}", file=sys.stderr, flush=True)
+print(f"[CaptionJob] Python: {sys.executable}", file=sys.stderr, flush=True)
+print(f"[CaptionJob] Python version: {sys.version}", file=sys.stderr, flush=True)
+
 import argparse
 import base64
 import io
 import json
 import math
-import os
+import signal
 import subprocess
-import sys
 import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any, Dict, List, Sequence
 
+print(f"[CaptionJob] Basic imports completed", file=sys.stderr, flush=True)
+
 import requests
 from PIL import Image
+
+print(f"[CaptionJob] All imports completed", file=sys.stderr, flush=True)
+
+# Set up signal handler to catch SIGTERM
+def signal_handler(signum, frame):
+    print(f"[CaptionJob] Received signal {signum} (SIGTERM)", file=sys.stderr, flush=True)
+    import traceback
+    print(f"[CaptionJob] Stack trace at signal:", file=sys.stderr, flush=True)
+    traceback.print_stack(frame, file=sys.stderr)
+    sys.stderr.flush()
+    sys.exit(128 + signum)
+
+signal.signal(signal.SIGTERM, signal_handler)
+print(f"[CaptionJob] Signal handler installed", file=sys.stderr, flush=True)
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.append(str(REPO_ROOT))
 
+print(f"[CaptionJob] About to import MultiOllamaManager", file=sys.stderr, flush=True)
 from modules.util.ollama_multi_manager import MultiOllamaManager
+print(f"[CaptionJob] MultiOllamaManager imported successfully", file=sys.stderr, flush=True)
 
 
 def parse_args() -> argparse.Namespace:
@@ -174,7 +199,10 @@ def process_bucket(host: str, jobs: Sequence[Dict[str, Any]], max_side: int, wor
 
 
 def main() -> int:
+    print(f"[CaptionJob] Starting caption job (Python {sys.version.split()[0]})", flush=True)
+    print(f"[CaptionJob] Script location: {Path(__file__).resolve()}", flush=True)
     args = parse_args()
+    print(f"[CaptionJob] Loading manifest: {args.manifest}", flush=True)
     manifest = load_manifest(args.manifest)
     jobs: List[Dict[str, Any]] = manifest.get("jobs", [])
     if not jobs:
@@ -216,5 +244,17 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    try:
+        exit_code = main()
+        sys.exit(exit_code)
+    except KeyboardInterrupt:
+        print("[CaptionJob] Interrupted by user", file=sys.stderr)
+        sys.exit(130)
+    except Exception as exc:
+        import traceback
+        error_msg = f"[CaptionJob] FATAL ERROR: {type(exc).__name__}: {exc}\n"
+        error_msg += "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))
+        print(error_msg, file=sys.stderr)
+        sys.stderr.flush()
+        sys.exit(1)
 
