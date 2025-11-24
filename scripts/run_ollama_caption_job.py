@@ -122,10 +122,18 @@ def kill_all_ollama_processes() -> None:
             pass
 
 
-def ensure_model_available(model: str, timeout: float = 300.0) -> None:
+def ensure_model_available(model: str, host: str = None, timeout: float = 300.0) -> None:
     if not model:
         return
     try:
+        env = os.environ.copy()
+        if host:
+            # Extract host:port from URL (e.g., "http://127.0.0.1:12134" -> "127.0.0.1:12134")
+            if host.startswith("http://"):
+                host = host[7:]
+            elif host.startswith("https://"):
+                host = host[8:]
+            env["OLLAMA_HOST"] = host
         result = subprocess.run(
             ["ollama", "pull", model],
             check=True,
@@ -133,6 +141,7 @@ def ensure_model_available(model: str, timeout: float = 300.0) -> None:
             stderr=subprocess.PIPE,
             timeout=timeout,
             text=True,
+            env=env,
         )
         # Log success (but only if there's output, to avoid spam)
         if result.stdout:
@@ -277,9 +286,10 @@ def main() -> int:
             raise RuntimeError("No Ollama hosts were started; check Ollama installation and logs.")
         
         # Pull models AFTER Ollama servers are started (they need a server to connect to)
+        # Use the first host to pull models (models are shared across all servers)
         unique_models = sorted({job.get("model") for job in jobs if job.get("model")})
         for model in unique_models:
-            ensure_model_available(model)
+            ensure_model_available(model, host=hosts[0] if hosts else None)
         buckets = chunk_jobs(jobs, len(hosts))
 
         with ThreadPoolExecutor(max_workers=len(hosts)) as executor:
