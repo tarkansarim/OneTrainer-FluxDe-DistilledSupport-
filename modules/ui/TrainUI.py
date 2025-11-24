@@ -3,7 +3,9 @@ import datetime
 import json
 import os
 import platform
+import psutil
 import shutil
+import signal
 import subprocess
 import sys
 import threading
@@ -132,6 +134,7 @@ class TrainUI(ctk.CTk):
         self.training_thread = None
         self.training_callbacks = None
         self.training_commands = None
+        self.training_trainer = None  # Store trainer instance for immediate termination
 
         self.always_on_tensorboard_subprocess = None
         self.current_workspace_dir = self.train_config.workspace_dir
@@ -780,6 +783,7 @@ class TrainUI(ctk.CTk):
         error_caught = False
         trainer = None
         sample_snapshot_path = None
+        immediate_termination = False
 
         try:
             self.training_callbacks = TrainCallbacks(
@@ -801,25 +805,43 @@ class TrainUI(ctk.CTk):
                 self.training_commands,
                 reattach=self.cloud_tab.reattach,
             )
-
-            try:
-                # If cloud training is enabled, skip local Ollama restart entirely.
-                # The remote script (train_remote.py) handles starting Ollama on the cloud pod.
-                if not train_config.cloud.enabled:
-                    ollama_manager.prepare(
-                    train_config.train_device,
-                    getattr(train_config, "device_indexes", ""),
-                    bool(getattr(train_config, "multi_gpu", False)),
-                )
-            except Exception as exc:
-                traceback.print_exc()
-                self.on_update_status(f"Warning: failed to restart Ollama with training GPU ({exc})")
+            
+            # Store trainer reference for immediate termination
+            self.training_trainer = trainer
 
             trainer.start()
             self._schedule_cloud_ui_refresh()
             self.start_time = time.monotonic()
             trainer.train()
+        except SystemExit as e:
+            # os._exit() raises SystemExit - this is immediate termination
+            if self.training_commands and self.training_commands.get_terminate_immediately():
+                immediate_termination = True
+                print(f"\n[Trainer] Training terminated immediately as requested")
+                sys.stdout.flush()
+                # Skip normal cleanup for immediate termination
+                # Just clean up thread references
+                self.training_thread = None
+                self.training_commands = None
+                self._set_training_button_idle()
+                self.on_update_status("Training terminated immediately")
+                return
+            raise
         except Exception as e:
+            # Check if this is immediate termination exception
+            exception_type_name = type(e).__name__
+            if exception_type_name == "ImmediateTerminationException" or \
+               (self.training_commands and self.training_commands.get_terminate_immediately()):
+                immediate_termination = True
+                print(f"\n[Trainer] Training terminated immediately as requested: {e}")
+                sys.stdout.flush()
+                # Skip normal cleanup for immediate termination
+                # Just clean up thread references
+                self.training_thread = None
+                self.training_commands = None
+                self._set_training_button_idle()
+                self.on_update_status("Training terminated immediately")
+                return
             self._schedule_cloud_ui_refresh()
             error_caught = True
             print(f"\n{'='*80}")
@@ -829,6 +851,10 @@ class TrainUI(ctk.CTk):
             print(f"{'='*80}\n")
             sys.stdout.flush()
         finally:
+            # Skip cleanup if immediate termination was requested
+            if immediate_termination:
+                return
+                
             trained_any_steps = bool(trainer) and getattr(trainer, "one_step_trained", False)
 
             if trainer is not None:
@@ -867,6 +893,69 @@ class TrainUI(ctk.CTk):
 
         if self.train_config.tensorboard_always_on and not self.always_on_tensorboard_subprocess:
             self.after(0, self._start_always_on_tensorboard)
+
+    def _detail_captioning_enabled(self, config: TrainConfig) -> bool:
+        for detail_cfg in self._iter_detail_crop_configs(config):
+            if detail_cfg and self._detail_cfg_has_captioning(detail_cfg):
+                return True
+        return False
+
+    def _iter_detail_crop_configs(self, config: TrainConfig):
+        concepts = getattr(config, "concepts", None) or []
+        yielded = False
+        for concept in concepts:
+            detail_cfg = self._extract_detail_cfg(concept)
+            if detail_cfg:
+                yielded = True
+                yield detail_cfg
+        if yielded:
+            return
+        concept_path = (getattr(config, "concept_file_name", "") or "").strip()
+        if not concept_path:
+            return
+        workspace = getattr(config, "workspace_dir", "") or ""
+        path = Path(concept_path)
+        if not path.is_absolute() and workspace:
+            path = Path(workspace) / path
+        try:
+            with open(path, "r", encoding="utf-8") as fh:
+                raw = json.load(fh)
+        except Exception:
+            return
+        if isinstance(raw, dict):
+            raw = raw.get("concepts", raw)
+        if not isinstance(raw, list):
+            return
+        for concept in raw:
+            detail_cfg = self._extract_detail_cfg(concept)
+            if detail_cfg:
+                yield detail_cfg
+
+    @staticmethod
+    def _extract_detail_cfg(concept):
+        image_cfg = getattr(concept, "image", None)
+        if image_cfg is None and isinstance(concept, dict):
+            image_cfg = concept.get("image")
+        if image_cfg is None:
+            return None
+        detail_cfg = getattr(image_cfg, "detail_crops", None)
+        if detail_cfg is None and isinstance(image_cfg, dict):
+            detail_cfg = image_cfg.get("detail_crops")
+        return detail_cfg
+
+    @staticmethod
+    def _detail_cfg_has_captioning(detail_cfg) -> bool:
+        def _fetch(obj, key, default):
+            if hasattr(obj, key):
+                return getattr(obj, key)
+            if isinstance(obj, dict):
+                return obj.get(key, default)
+            return default
+
+        enabled = bool(_fetch(detail_cfg, "enabled", False))
+        captioning = bool(_fetch(detail_cfg, "enable_captioning", False))
+        probability = float(_fetch(detail_cfg, "caption_probability", 0.0) or 0.0)
+        return enabled and captioning and probability > 0.0
 
     def _snapshot_sample_definition(self, config: TrainConfig) -> str | None:
         sample_path = config.sample_definition_file_name
@@ -947,9 +1036,11 @@ class TrainUI(ctk.CTk):
             self.training_thread = threading.Thread(target=self.__training_thread_function)
             self.training_thread.start()
         else:
-            self._set_training_button_stopping()
-            self.on_update_status("Stopping ...")
-            self.training_commands.stop()
+            # Show dialog to ask user if they want to wait for backup or terminate immediately
+            dialogs.StopTrainingDialog(
+                self,
+                callback=self._handle_stop_training_choice
+            )
 
     def save_default(self):
         self.top_bar_component.save_default()
@@ -1080,6 +1171,75 @@ class TrainUI(ctk.CTk):
                 self.always_on_tensorboard_subprocess = None
             else:
                 self.always_on_tensorboard_subprocess = None
+
+    def _handle_stop_training_choice(self, terminate_immediately: bool):
+        """Handle the user's choice from the stop training dialog"""
+        self._set_training_button_stopping()
+        
+        if terminate_immediately:
+            self.on_update_status("Terminating immediately...")
+            # Kill processes immediately
+            self._kill_training_processes()
+        else:
+            self.on_update_status("Stopping (waiting for backup)...")
+            self.training_commands.stop(terminate_immediately=False)
+    
+    def _kill_training_processes(self):
+        """Immediately kill all training processes"""
+        try:
+            # Send terminate command first (works for both local and remote)
+            if self.training_commands:
+                self.training_commands.stop(terminate_immediately=True)
+            
+            # For local training, also kill processes directly for immediate effect
+            # For cloud training, the remote trainer will handle killing via the command
+            if not (self.training_trainer and hasattr(self.training_trainer, 'cloud')):
+                # Local training - kill processes directly
+                # Get current process
+                current_process = psutil.Process()
+                
+                # Kill all child processes (this includes multi-GPU spawned processes)
+                killed_pids = []
+                for child in current_process.children(recursive=True):
+                    try:
+                        if platform.system() == "Windows":
+                            child.kill()  # On Windows, kill() is immediate
+                        else:
+                            child.send_signal(signal.SIGKILL)  # Force kill on Unix
+                        killed_pids.append(child.pid)
+                        print(f"[Trainer] Killed process {child.pid}")
+                    except (psutil.NoSuchProcess, psutil.AccessDenied):
+                        pass
+                
+                # Wait for processes to die and ports to be released
+                if killed_pids:
+                    time.sleep(1.0)  # Give more time for ports to be released
+                
+                # Try to clean up PyTorch distributed process group if it exists
+                # Do this after killing processes to ensure cleanup happens
+                try:
+                    import torch
+                    if torch.distributed.is_initialized():
+                        try:
+                            torch.distributed.destroy_process_group()
+                        except Exception:
+                            pass  # Ignore errors - process group might already be destroyed
+                except Exception:
+                    pass  # Ignore errors during cleanup
+            
+            # Force cleanup
+            self.training_thread = None
+            self.training_commands = None
+            self.training_trainer = None
+            self._set_training_button_idle()
+            self.on_update_status("Training terminated immediately")
+            
+        except Exception as e:
+            print(f"[Trainer] Error killing processes: {e}")
+            traceback.print_exc()
+            # Fallback: just set the stop command
+            if self.training_commands:
+                self.training_commands.stop(terminate_immediately=True)
 
     def _stop_always_on_tensorboard(self):
         if self.always_on_tensorboard_subprocess:

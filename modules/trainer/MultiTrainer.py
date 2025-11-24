@@ -48,6 +48,21 @@ class MultiTrainer(BaseTrainer):
 
     @staticmethod #must be static and not use __ prefix, otherwise the pickling done by torch.multiprocessing fails
     def _train_process(spawn_rank: int, world_size: int, config_dict: dict, devices: list[torch.device], callbacks: TrainCallbacks=None):
+        # Clean up any existing process group before initializing a new one
+        # This handles the case where processes were killed immediately and cleanup didn't happen
+        import time
+        needs_wait = False
+        if torch.distributed.is_initialized():
+            try:
+                torch.distributed.destroy_process_group()
+                needs_wait = True  # We destroyed a process group, wait for ports to release
+            except Exception:
+                pass  # Ignore errors during cleanup
+        
+        # If we just cleaned up, wait a bit longer for ports/sockets to be fully released
+        # This prevents "address already in use" errors when restarting training
+        if needs_wait:
+            time.sleep(2.0)  # Wait 2 seconds for ports to be released
         if callbacks is None:
             callbacks = TrainCallbacks()
         rank = spawn_rank + 1
@@ -64,8 +79,24 @@ class MultiTrainer(BaseTrainer):
         #The other GPU processes have to wait without timing out:
         timeout = datetime.timedelta(hours=24)
 
-        torch.distributed.init_process_group(rank=rank, world_size=world_size, device_id=device, timeout=timeout,
+        # Wait a bit longer if we just cleaned up a process group to let ports release
+        if needs_wait:
+            time.sleep(2.0)
+        
+        # Force use of localhost/127.0.0.1 to avoid kubernetes.docker.internal issues on Windows
+        # Use the MASTER_ADDR and MASTER_PORT from environment (set in start())
+        # This ensures all processes use the same address/port
+        master_addr = os.environ.get('MASTER_ADDR', '127.0.0.1')
+        master_port = os.environ.get('MASTER_PORT', '29500')
+        init_method = f'tcp://{master_addr}:{master_port}'
+        
+        torch.distributed.init_process_group(
+            rank=rank, 
+            world_size=world_size, 
+            device_id=device, 
+            timeout=timeout,
             backend='gloo' if platform.system() == 'Windows' else 'nccl',
+            init_method=init_method
         )
         torch.cuda.set_device(device.index)
 
@@ -80,20 +111,29 @@ class MultiTrainer(BaseTrainer):
 
 
         trainer = GenericTrainer(config, callbacks, TrainCommands())
+        immediate_termination = False
         try:
             for _ in multi.sequential(enabled=config.sequential_model_setup):
                 trainer.start()
             trainer.train()
-        except Exception:
+        except Exception as e:
+            # Check if this is immediate termination - if so, don't do cleanup
+            exception_type_name = type(e).__name__
+            if exception_type_name == "ImmediateTerminationException":
+                immediate_termination = True
+                # For immediate termination, skip cleanup and re-raise
+                raise
             traceback.print_exc()
             raise
         finally:
-            trainer.end()
-            # Synchronize all ranks before destroying process group to prevent deadlock
-            # where rank 0 tears down TCPStore while other ranks are still using it
-            if torch.distributed.is_initialized():
-                torch.distributed.barrier()
-            torch.distributed.destroy_process_group()
+            # Skip cleanup for immediate termination
+            if not immediate_termination:
+                trainer.end()
+                # Synchronize all ranks before destroying process group to prevent deadlock
+                # where rank 0 tears down TCPStore while other ranks are still using it
+                if torch.distributed.is_initialized():
+                    torch.distributed.barrier()
+                torch.distributed.destroy_process_group()
 
     def train(self):
         config_dict = self.config.to_pack_dict(secrets=True)

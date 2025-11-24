@@ -47,7 +47,11 @@ import huggingface_hub
 from requests.exceptions import ConnectionError
 from tqdm import tqdm
 
-from mgds.pipelineModuleTypes.RandomAccessPipelineModule import RandomAccessPipelineModule
+
+class ImmediateTerminationException(Exception):
+    """Exception raised when immediate termination is requested"""
+    pass
+
 
 class GenericTrainer(BaseTrainer):
     model_loader: BaseModelLoader
@@ -237,10 +241,19 @@ class GenericTrainer(BaseTrainer):
         print(f"[DataLoader] Training dataset approximate length: {approximate_length}")
         sys.stdout.flush()
         if approximate_length == 0:
-            print(
-                "[DataLoader] WARNING: dataset length is zero. No training batches will be processed. "
-                "Verify detail crop configuration, filters, and include_full_images settings."
-            )
+            # Check if detail crops are enabled - if so, crops will be generated dynamically
+            # during the first epoch, so a zero length at this point is expected
+            detail_crops_enabled = self.__detail_crops_require_parallel_execution()
+            if detail_crops_enabled:
+                print(
+                    "[DataLoader] INFO: Dataset length is zero before detail crop generation. "
+                    "Detail crops will be generated dynamically during the first epoch."
+                )
+            else:
+                print(
+                    "[DataLoader] WARNING: dataset length is zero. No training batches will be processed. "
+                    "Verify detail crop configuration, filters, and include_full_images settings."
+                )
             sys.stdout.flush()
         
         self.model_saver = self.create_model_saver()
@@ -436,15 +449,23 @@ class GenericTrainer(BaseTrainer):
         self.sample_queue.append(fun)
 
     def __execute_sample_during_training(self):
-        for idx, fun in enumerate(self.sample_queue):
+        # Execute all queued samples
+        queue_copy = list(self.sample_queue)  # Copy to avoid modification during iteration
+        for idx, fun in enumerate(queue_copy):
+            # Check for immediate termination before each sample
+            multi.sync_commands(self.commands)
+            if self.commands.get_stop_command() and self.commands.get_terminate_immediately():
+                raise ImmediateTerminationException("Training terminated immediately as requested")
             try:
                 fun()
+            except ImmediateTerminationException:
+                raise
             except Exception as exc:
-                print(f"[Trainer] ERROR executing sample {idx+1}: {exc}")
+                tqdm.write(f"[GPU #{multi.rank()}] ERROR executing sample {idx+1}: {exc}")
                 traceback.print_exc()
                 sys.stdout.flush()
                 raise
-        self.sample_queue = []
+        # Queue is cleared by caller after execution
 
     def __sample_loop(
             self,
@@ -455,7 +476,32 @@ class GenericTrainer(BaseTrainer):
             folder_postfix: str = "",
             is_custom_sample: bool = False,
     ):
-        enumerated = list(multi.distributed_enumerate(sample_config_list, distribute=not self.config.samples_to_tensorboard and not ema_applied))
+        gpu_info = f"[GPU #{multi.rank()}] " if multi.is_enabled() else ""
+        distribute_samples = not self.config.samples_to_tensorboard and not ema_applied
+        
+        # Filter to only enabled samples before distribution
+        enabled_samples = [(i, s) for i, s in enumerate(sample_config_list) if s.enabled]
+        enabled_indices = [i for i, _ in enabled_samples]
+        enabled_configs = [s for _, s in enabled_samples]
+        
+        # Distribute only enabled samples
+        if distribute_samples and multi.is_enabled():
+            # Re-enumerate enabled samples for distribution
+            distributed = [(enabled_indices[i], cfg) for i, cfg in enumerate(enabled_configs) if i % multi.world_size() == multi.rank()]
+        elif multi.is_master() or not multi.is_enabled():
+            distributed = [(i, cfg) for i, cfg in enabled_samples]
+        else:
+            distributed = []
+        
+        enumerated = distributed
+        
+        # Print which samples this GPU will process (once, before starting)
+        if multi.is_enabled() and enumerated:
+            sample_indices = [i for i, _ in enumerated]
+            if sample_indices:
+                total_samples = len(enabled_samples)
+                tqdm.write(f"{gpu_info}Sampling {len(sample_indices)}/{total_samples} samples: {', '.join(map(str, sample_indices))}")
+        
         for i, sample_config in enumerated:
             if sample_config.enabled:
                 try:
@@ -510,7 +556,7 @@ class GenericTrainer(BaseTrainer):
                     )
                 except Exception:
                     traceback.print_exc()
-                    print("Error during sampling, proceeding without sampling")
+                    tqdm.write(f"{gpu_info}Error during sampling, proceeding without sampling")
 
                 torch_gc()
 
@@ -520,18 +566,14 @@ class GenericTrainer(BaseTrainer):
             train_device: torch.device,
             sample_params_list: list[SampleConfig] = None,
     ):
-        # In multi-GPU training, only sample on master rank to ensure consistent results
-        # (EMA sampling is already master-only, but non-EMA was running on all GPUs)
-        if multi.is_enabled() and not multi.is_master():
-            return
-
         # Special case for schedule-free optimizers.
         if self.config.optimizer.optimizer.is_schedule_free:
             torch.clear_autocast_cache()
             self.model.optimizer.eval()
         torch_gc()
 
-        self.callbacks.on_update_status("Sampling ...")
+        gpu_info = f"[GPU #{multi.rank()}] " if multi.is_enabled() else ""
+        self.callbacks.on_update_status(f"{gpu_info}Sampling ...")
 
         is_custom_sample = False
         if sample_params_list:
@@ -548,16 +590,15 @@ class GenericTrainer(BaseTrainer):
             # We absolutely do not want to fail training just because the sample definition file becomes missing or broken right before sampling.
             except Exception:
                 traceback.print_exc()
-                print("Error during loading the sample definition file, proceeding without sampling")
+                tqdm.write(f"{gpu_info}Error during loading the sample definition file, proceeding without sampling")
                 sample_params_list = []
 
         if self.model.ema:
             #the EMA model only exists in the master process, so EMA sampling is done on one GPU only
-            #non-EMA sampling is also restricted to master rank (see early return above)
+            #non-EMA sampling is done on all GPUs
             assert multi.is_master() and self.config.ema != EMAMode.OFF
             if multi.is_master():
-                print(f"[Trainer] Copying EMA to parameters...")
-                sys.stdout.flush()
+                tqdm.write(f"{gpu_info}[Trainer] Copying EMA to parameters...")
             self.model.ema.copy_ema_to(self.parameters, store_temp=True)
 
         self.__sample_loop(
@@ -580,6 +621,10 @@ class GenericTrainer(BaseTrainer):
                 folder_postfix=" - no-ema",
                 ema_applied = False,
             )
+
+        # Synchronize all GPUs after sampling to ensure all samples complete before training continues
+        if multi.is_enabled():
+            torch.distributed.barrier()
 
         self.model_setup.setup_train_device(self.model, self.config)
         # Special case for schedule-free optimizers.
@@ -899,104 +944,14 @@ class GenericTrainer(BaseTrainer):
         for _epoch in tqdm(epochs, desc="epoch") if multi.is_master() else epochs:
             self.callbacks.on_update_status("Starting epoch/caching")
 
-            # For detail crops with distributed captioning:
-            # 1. Start crop/caption generation in parallel (all ranks simultaneously)
-            # 2. After crops/captions complete (they have internal barriers), switch to master_first for latent caching
-            use_parallel_start = detail_crops_parallel_hint
-            
-            if use_parallel_start and multi.world_size() > 1:
-                # Step 1: Start detail crop and caption modules in parallel (DO NOT TOUCH - working correctly)
-                from modules.dataLoader.pipelineModules import DetailCropGenerator, CropCaptionGenerator
-                
-                data_set = self.data_loader.get_data_set()
-                loading_pipeline = data_set.loading_pipeline
-                
-                # Manually increment epoch counter (mimicking what LoadingPipeline.start_next_epoch does)
-                loading_pipeline._LoadingPipeline__current_epoch += 1
-                next_epoch = loading_pipeline._LoadingPipeline__current_epoch
-                
-                # Clear item caches for all modules (mimicking what LoadingPipeline does)
-                for module in loading_pipeline.modules:
-                    module.clear_item_cache()
-                
-                # Start detail crop module first (in parallel across all ranks)
-                for module in loading_pipeline.modules:
-                    if isinstance(module, DetailCropGenerator):
-                        if isinstance(module, RandomAccessPipelineModule) and not module.started:
-                            module.start(next_epoch)
-                            module.started = True
-                
-                # Synchronize after detail crop generation completes on all ranks
-                # This ensures crop entries are populated before caption module queries length
-                if torch.distributed.is_initialized():
-                    torch.distributed.barrier()
-                
-                # Now start caption module (captions depend on crops being populated)
-                # Force restart even if previously started (it may have returned early during approximate_length)
-                for module in loading_pipeline.modules:
-                    if isinstance(module, CropCaptionGenerator):
-                        if isinstance(module, RandomAccessPipelineModule):
-                            # Reset started flag to allow restart after crops are ready
-                            module.started = False
-                            module.start(next_epoch)
-                            module.started = True
-                
-                # Crop/caption modules have internal barriers, so all ranks are synchronized here
-                
-                # Step 2: Now switch to native OneTrainer behavior for latent caching (sequential/master_first)
-                # We already incremented the epoch and started crop/caption modules.
-                # start_next_epoch() will increment again, but that's okay - it checks if modules are already started.
-                # However, we need to decrement the epoch so start_next_epoch() increments to the correct value.
-                # But CropCaptionGenerator.length() uses the pipeline's current epoch, so we need to ensure
-                # it queries with the correct variation. The barrier in CropCaptionGenerator.start() should
-                # ensure DetailCropGenerator has finished, and we're calling start() with next_epoch=1,
-                # so the pipeline epoch should be 1 at that point.
-                loading_pipeline._LoadingPipeline__current_epoch -= 1
-                
-                for _ in multi.master_first():
-                    if self.config.latent_caching:
-                        try:
-                            # start_next_epoch() will:
-                            # 1. Increment epoch (back to 1, which is correct for epoch 0)
-                            # 2. Skip already-started modules (crops/captions)  
-                            # 3. Start latent cache modules sequentially (master rank only)
-                            self.data_loader.get_data_set().start_next_epoch()
-                        except Exception as e:
-                            print(f"[Trainer] ERROR in start_next_epoch(): {e}")
-                            traceback.print_exc()
-                            sys.stdout.flush()
-                            raise
-                        self.model_setup.setup_train_device(self.model, self.config)
-                    else:
-                        self.model_setup.setup_train_device(self.model, self.config)
-                        try:
-                            self.data_loader.get_data_set().start_next_epoch()
-                        except Exception as e:
-                            print(f"[Trainer] ERROR in start_next_epoch(): {e}")
-                            traceback.print_exc()
-                            sys.stdout.flush()
-                            raise
-            else:
-                # Standard master_first execution (sequential for safety when writing to shared cache)
-                for _ in multi.master_first():
-                    if self.config.latent_caching:
-                        try:
-                            self.data_loader.get_data_set().start_next_epoch()
-                        except Exception as e:
-                            print(f"[Trainer] ERROR in start_next_epoch(): {e}")
-                            traceback.print_exc()
-                            sys.stdout.flush()
-                            raise
-                        self.model_setup.setup_train_device(self.model, self.config)
-                    else:
-                        self.model_setup.setup_train_device(self.model, self.config)
-                        try:
-                            self.data_loader.get_data_set().start_next_epoch()
-                        except Exception as e:
-                            print(f"[Trainer] ERROR in start_next_epoch(): {e}")
-                            traceback.print_exc()
-                            sys.stdout.flush()
-                            raise
+            #call start_next_epoch with only one process at first, because it might write to the cache. All subsequent processes can read in parallel:
+            for _ in multi.master_first():
+                if self.config.latent_caching:
+                    self.data_loader.get_data_set().start_next_epoch()
+                    self.model_setup.setup_train_device(self.model, self.config)
+                else:
+                    self.model_setup.setup_train_device(self.model, self.config)
+                    self.data_loader.get_data_set().start_next_epoch()
 
             if self.config.debug_mode:
                 multi.warn_parameter_divergence(self.parameters, train_device)
@@ -1042,12 +997,18 @@ class GenericTrainer(BaseTrainer):
                 multi.sync_commands(self.commands)
                 
                 if self.commands.get_stop_command():
+                    if self.commands.get_terminate_immediately():
+                        # Immediate termination - raise exception to bypass normal cleanup
+                        print("\n[Trainer] Immediate termination requested - stopping training immediately...")
+                        sys.stdout.flush()
+                        raise ImmediateTerminationException("Training terminated immediately as requested")
                     multi.warn_parameter_divergence(self.parameters, train_device)
 
                 needs_sample = self.__needs_sample(train_progress)
                 sample_command = self.commands.get_and_reset_sample_default_command()
                 
-                if needs_sample or sample_command:
+                # Only enqueue sampling if not already queued to avoid duplicates
+                if (needs_sample or sample_command) and len(self.sample_queue) == 0:
                     self.__enqueue_sample_during_training(
                         lambda: self.__sample_during_training(train_progress, train_device)
                     )
@@ -1072,7 +1033,10 @@ class GenericTrainer(BaseTrainer):
 
                 if not has_gradient:
                     if len(self.sample_queue) > 0:
+                        # Execute all queued samples, then clear the queue to prevent duplicates
                         self.__execute_sample_during_training()
+                        # Clear queue after execution to prevent re-execution
+                        self.sample_queue = []
                     backup = self.commands.get_and_reset_backup_command()
                     save = self.commands.get_and_reset_save_command()
                     if multi.is_master() and (backup or save):
@@ -1184,12 +1148,20 @@ class GenericTrainer(BaseTrainer):
                 self.callbacks.on_update_train_progress(train_progress, current_epoch_length, self.config.epochs)
 
                 if self.commands.get_stop_command():
+                    if self.commands.get_terminate_immediately():
+                        print("\n[Trainer] Immediate termination requested - stopping training immediately...")
+                        sys.stdout.flush()
+                        raise ImmediateTerminationException("Training terminated immediately as requested")
                     return
 
             train_progress.next_epoch()
             self.callbacks.on_update_train_progress(train_progress, current_epoch_length, self.config.epochs)
 
             if self.commands.get_stop_command():
+                if self.commands.get_terminate_immediately():
+                    print("\n[Trainer] Immediate termination requested - stopping training immediately...")
+                    sys.stdout.flush()
+                    raise ImmediateTerminationException("Training terminated immediately as requested")
                 return
 
     def end(self):

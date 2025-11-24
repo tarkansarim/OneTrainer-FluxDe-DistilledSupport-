@@ -9,6 +9,7 @@ class TrainCommands:
     ):
         self.reset()
         self.__stop_command = False
+        self.__terminate_immediately = False
         self.__on_command = on_command
 
     def reset(self):
@@ -29,13 +30,17 @@ class TrainCommands:
         self.__on_command=None
         return on_command
 
-    def stop(self):
+    def stop(self, terminate_immediately: bool = False):
         self.__stop_command = True
+        self.__terminate_immediately = terminate_immediately
         if self.__on_command:
             self.__on_command(self)
 
     def get_stop_command(self) -> bool:
         return self.__stop_command
+    
+    def get_terminate_immediately(self) -> bool:
+        return self.__terminate_immediately
 
     def sample_custom(self, sample_params: SampleConfig):
         self.__sample_custom_commands.append(sample_params)
@@ -79,7 +84,7 @@ class TrainCommands:
 
     def merge(self, other):
         if other.get_stop_command():
-            self.stop()
+            self.stop(terminate_immediately=other.get_terminate_immediately())
         for entry in other.get_and_reset_sample_custom_commands():
             self.sample_custom(entry)
         if other.get_and_reset_sample_default_command():

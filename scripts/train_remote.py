@@ -171,6 +171,28 @@ def main():
             trainer.start()
             trainer.train()
 
+    except Exception as e:
+        # Check if this is immediate termination - if so, kill all processes
+        exception_type_name = type(e).__name__
+        if exception_type_name == "ImmediateTerminationException" or \
+           (commands.get_stop_command() and commands.get_terminate_immediately()):
+            import psutil
+            import signal
+            print("\n[Trainer] Immediate termination requested - killing all processes...")
+            try:
+                # Kill all child processes (multi-GPU spawned processes)
+                current_process = psutil.Process()
+                for child in current_process.children(recursive=True):
+                    try:
+                        child.send_signal(signal.SIGKILL)
+                        print(f"[Trainer] Killed process {child.pid}")
+                    except (psutil.NoSuchProcess, psutil.AccessDenied):
+                        pass
+            except Exception as kill_error:
+                print(f"[Trainer] Error killing processes: {kill_error}")
+            # Re-raise to exit
+            raise
+
     finally:
         if args.command_path:
             stop_event.set()
