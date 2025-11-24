@@ -919,21 +919,19 @@ class GenericTrainer(BaseTrainer):
                 for module in loading_pipeline.modules:
                     module.clear_item_cache()
                 
-                # Start crop/caption modules in parallel (all ranks simultaneously)
+                # Start detail crop module first (in parallel across all ranks)
                 for module in loading_pipeline.modules:
-                    module_type = type(module).__name__
-                    if isinstance(module, (DetailCropGenerator, CropCaptionGenerator)):
-                        is_random_access = isinstance(module, RandomAccessPipelineModule)
-                        already_started = module.started if hasattr(module, 'started') else False
-                        print(f"[Rank {multi.rank()}] Found {module_type}: is_random_access={is_random_access}, already_started={already_started}")
-                        sys.stdout.flush()
+                    if isinstance(module, DetailCropGenerator):
                         if isinstance(module, RandomAccessPipelineModule) and not module.started:
-                            print(f"[Rank {multi.rank()}] Starting {module_type} for epoch {next_epoch}")
-                            sys.stdout.flush()
                             module.start(next_epoch)
                             module.started = True
-                            print(f"[Rank {multi.rank()}] Completed starting {module_type}")
-                            sys.stdout.flush()
+                
+                # Now start caption module (captions depend on crops being populated)
+                for module in loading_pipeline.modules:
+                    if isinstance(module, CropCaptionGenerator):
+                        if isinstance(module, RandomAccessPipelineModule) and not module.started:
+                            module.start(next_epoch)
+                            module.started = True
                 
                 # Crop/caption modules have internal barriers, so all ranks are synchronized here
                 
