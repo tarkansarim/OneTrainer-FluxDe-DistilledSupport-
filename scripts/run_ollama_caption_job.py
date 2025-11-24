@@ -77,6 +77,7 @@ def load_manifest(path: str) -> Dict[str, Any]:
 
 
 def kill_all_ollama_processes() -> None:
+    """Kill all Ollama processes with a timeout to avoid blocking."""
     if os.name == "nt":
         commands = [
             ["sc", "stop", "Ollama"],
@@ -87,8 +88,13 @@ def kill_all_ollama_processes() -> None:
         commands = [["pkill", "-f", "ollama"]]
     for cmd in commands:
         try:
-            subprocess.run(cmd, check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            # Use timeout to prevent hanging if process doesn't respond
+            subprocess.run(cmd, check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=5.0)
+        except subprocess.TimeoutExpired:
+            # Process didn't complete in time, but that's okay - we tried
+            pass
         except Exception:
+            # Any other exception is fine - we're just trying to clean up
             pass
 
 
@@ -214,7 +220,12 @@ def main() -> int:
     base_port = int(config.get("base_port", 12134))
     show_console = bool(config.get("show_console", True))
 
-    kill_all_ollama_processes()
+    print(f"[CaptionJob] Cleaning up any existing Ollama processes...", flush=True)
+    try:
+        kill_all_ollama_processes()
+        print(f"[CaptionJob] Ollama cleanup completed", flush=True)
+    except Exception as e:
+        print(f"[CaptionJob] Warning: Ollama cleanup failed (non-fatal): {e}", flush=True)
     unique_models = sorted({job.get("model") for job in jobs if job.get("model")})
     for model in unique_models:
         ensure_model_available(model)
