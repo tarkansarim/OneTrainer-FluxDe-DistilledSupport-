@@ -4,6 +4,7 @@ import hashlib
 import io
 import json
 import os
+import shlex
 import subprocess
 import sys
 import time
