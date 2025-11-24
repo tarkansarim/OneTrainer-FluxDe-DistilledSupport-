@@ -157,6 +157,16 @@ class CropCaptionGenerator(PipelineModule, RandomAccessPipelineModule):
             self._pregeneration_complete = True
             return
 
+        # Early validation: external captioner requires save_to_disk=True
+        if not detail_cfg.get('save_to_disk', False):
+            error_msg = (
+                "Detail crop captioning requires 'save_to_disk=True' in the detail crop configuration "
+                "when using the external captioner. Please enable 'Save Crops to Disk' in your detail crop settings."
+            )
+            print(f"[Detail Captions] ERROR: {error_msg}")
+            sys.stdout.flush()
+            raise RuntimeError(error_msg)
+
         barrier_pending = distributed_ready
         try:
             manifest_info = None
@@ -248,7 +258,9 @@ class CropCaptionGenerator(PipelineModule, RandomAccessPipelineModule):
 
         if not detail_cfg.get('save_to_disk', False):
             raise RuntimeError(
-                "Detail crop captioning requires 'save_to_disk=True' in the detail crop configuration when using the external captioner."
+                f"Detail crop captioning requires 'save_to_disk=True' in the detail crop configuration "
+                f"when using the external captioner (concept at dataset index {dataset_index}). "
+                f"Please enable 'Save Crops to Disk' in your detail crop settings."
             )
         save_dir = os.path.join(os.getcwd(), "workspace-cache", "detail_crops_cache")
         save_dir = os.path.abspath(save_dir)
