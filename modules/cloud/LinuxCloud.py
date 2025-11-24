@@ -322,10 +322,29 @@ class LinuxCloud(BaseCloud):
                 
                 # Update repo and ensure dependencies are installed
                 # CRITICAL: Unset OT_LAZY_UPDATES to force dependency installation
-                self.connection.run(base_cmd_env + " && unset OT_LAZY_UPDATES && ./update.sh", in_stream=False)
+                update_result = self.connection.run(
+                    base_cmd_env + " && unset OT_LAZY_UPDATES && ./update.sh 2>&1",
+                    in_stream=False,
+                    warn=True
+                )
+                if update_result.exited != 0:
+                    error_output = (update_result.stdout or "") + (update_result.stderr or "")
+                    print(f"[Cloud] update.sh failed with exit code {update_result.exited}")
+                    print(f"[Cloud] Error output: {error_output}")
+                    raise RuntimeError(f"update.sh failed: {error_output}")
         else:
             # Fresh install: unset OT_LAZY_UPDATES to ensure all dependencies install correctly
-            self.connection.run(base_cmd_env + " && unset OT_LAZY_UPDATES && ./install.sh", in_stream=False)
+            # Capture both stdout and stderr to see the actual error
+            install_result = self.connection.run(
+                base_cmd_env + " && unset OT_LAZY_UPDATES && ./install.sh 2>&1",
+                in_stream=False,
+                warn=True
+            )
+            if install_result.exited != 0:
+                error_output = (install_result.stdout or "") + (install_result.stderr or "")
+                print(f"[Cloud] install.sh failed with exit code {install_result.exited}")
+                print(f"[Cloud] Error output: {error_output}")
+                raise RuntimeError(f"install.sh failed: {error_output}")
         
         # Validate CUDA driver and Torch compatibility; fall back to a lower CUDA tag if necessary.
         try:
