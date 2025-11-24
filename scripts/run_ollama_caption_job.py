@@ -77,7 +77,7 @@ def load_manifest(path: str) -> Dict[str, Any]:
 
 
 def kill_all_ollama_processes() -> None:
-    """Kill all Ollama processes with a timeout to avoid blocking."""
+    """Kill all Ollama processes using non-blocking approach to avoid hanging."""
     if os.name == "nt":
         commands = [
             ["sc", "stop", "Ollama"],
@@ -85,16 +85,40 @@ def kill_all_ollama_processes() -> None:
             ["taskkill", "/IM", "ollama app.exe", "/F", "/T"],
         ]
     else:
-        commands = [["pkill", "-f", "ollama"]]
+        # First check if any ollama serve processes exist before trying to kill
+        # This avoids unnecessary pkill calls that might cause issues
+        try:
+            check_result = subprocess.run(
+                ["pgrep", "-f", "ollama serve"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=1.0,
+            )
+            if check_result.returncode != 0:
+                # No ollama processes found, nothing to kill
+                return
+        except Exception:
+            # If check fails, proceed with kill attempt anyway
+            pass
+        
+        # Use pkill with more specific pattern to avoid matching ourselves
+        # Only match processes with "ollama serve" in the command line
+        commands = [["pkill", "-f", "ollama serve"]]
+    
     for cmd in commands:
         try:
-            # Use timeout to prevent hanging if process doesn't respond
-            subprocess.run(cmd, check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=5.0)
-        except subprocess.TimeoutExpired:
-            # Process didn't complete in time, but that's okay - we tried
-            pass
+            # Use Popen with immediate return to avoid blocking
+            # Don't wait for completion - fire and forget
+            # start_new_session detaches from parent to avoid signal propagation
+            subprocess.Popen(
+                cmd,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                start_new_session=True,
+            )
+            # Don't store or wait for process - just fire and forget
         except Exception:
-            # Any other exception is fine - we're just trying to clean up
+            # Any exception is fine - we're just trying to clean up
             pass
 
 
@@ -223,9 +247,12 @@ def main() -> int:
     print(f"[CaptionJob] Cleaning up any existing Ollama processes...", flush=True)
     try:
         kill_all_ollama_processes()
-        print(f"[CaptionJob] Ollama cleanup completed", flush=True)
+        print(f"[CaptionJob] Ollama cleanup initiated (non-blocking)", flush=True)
     except Exception as e:
         print(f"[CaptionJob] Warning: Ollama cleanup failed (non-fatal): {e}", flush=True)
+    except KeyboardInterrupt:
+        # If we're interrupted during cleanup, just continue
+        print(f"[CaptionJob] Cleanup interrupted, continuing anyway", flush=True)
     unique_models = sorted({job.get("model") for job in jobs if job.get("model")})
     for model in unique_models:
         ensure_model_available(model)
