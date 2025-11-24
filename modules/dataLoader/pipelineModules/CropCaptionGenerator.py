@@ -108,7 +108,28 @@ class CropCaptionGenerator(PipelineModule, RandomAccessPipelineModule):
         super().clear_item_cache()
 
     def length(self) -> int:
-        return self._get_previous_length(self.prompt_name)
+        """
+        Approximate the number of detail crops that need captions.
+        Prefer detail crop specific signals if they exist, because the raw prompt length
+        only reflects the base dataset (e.g., 7 images) instead of the expanded crop set.
+        """
+        detail_length_fields = (
+            "detail_crop_index",
+            "detail_crop_type",
+            "detail_crop_coords",
+        )
+
+        for field in detail_length_fields:
+            with suppress(Exception):
+                detail_length = self._get_previous_length(field)
+                if detail_length > 0:
+                    return detail_length
+
+        # Fall back to prompt length so non-detail mode still works
+        with suppress(Exception):
+            return self._get_previous_length(self.prompt_name)
+
+        return 0
 
     def get_inputs(self) -> List[str]:
         return [
