@@ -388,6 +388,13 @@ class CropCaptionGenerator(PipelineModule, RandomAccessPipelineModule):
             "--manifest",
             manifest_path,
         ]
+        print(f"[Detail Captions] Running external caption job: {' '.join(cmd)}", flush=True)
+        print(f"[Detail Captions] Log file: {log_path}", flush=True)
+        print(f"[Detail Captions] Script path: {script_path}", flush=True)
+        print(f"[Detail Captions] Script exists: {script_path.exists()}", flush=True)
+        print(f"[Detail Captions] Working directory: {script_path.parents[1]}", flush=True)
+        print(f"[Detail Captions] Python executable: {sys.executable}", flush=True)
+        
         with open(log_path, "w", encoding="utf-8") as log_file:
             process = subprocess.Popen(
                 cmd,
@@ -398,17 +405,67 @@ class CropCaptionGenerator(PipelineModule, RandomAccessPipelineModule):
                 encoding="utf-8",
                 errors="replace",
             )
-            assert process.stdout is not None
-            for line in process.stdout:
-                log_file.write(line)
-                log_file.flush()
-                print(line.rstrip("\n"))
-                sys.stdout.flush()
-            return_code = process.wait()
+            # Check if process started successfully
+            if process.poll() is not None:
+                # Process already terminated
+                return_code = process.returncode
+                print(f"[Detail Captions] Process terminated immediately with exit code {return_code}", flush=True)
+            else:
+                assert process.stdout is not None
+                output_lines = []
+                for line in process.stdout:
+                    output_lines.append(line)
+                    log_file.write(line)
+                    log_file.flush()
+                    print(line.rstrip("\n"))
+                    sys.stdout.flush()
+                return_code = process.wait()
+                # If we got no output and process failed, it might have crashed before writing
+                if return_code != 0 and not output_lines:
+                    print(f"[Detail Captions] WARNING: Process failed with exit code {return_code} but produced no output", flush=True)
         if return_code != 0:
-            raise RuntimeError(
-                f"External caption job failed with exit code {return_code}. See log file: {log_path}"
+            # Read the log file to include error details
+            log_content = ""
+            log_file_exists = False
+            try:
+                if os.path.exists(log_path):
+                    log_file_exists = True
+                    with open(log_path, "r", encoding="utf-8", errors="ignore") as f:
+                        log_lines = f.readlines()
+                        # Include last 50 lines of log for context
+                        if log_lines:
+                            log_content = "\n".join(log_lines[-50:])
+                        else:
+                            log_content = "(log file exists but is empty)"
+            except Exception as e:
+                log_content = f"(error reading log file: {e})"
+            
+            # Check if process was killed by signal (negative exit code on Unix)
+            signal_info = ""
+            if return_code < 0:
+                signal_num = -return_code
+                signal_info = f" (killed by signal {signal_num}"
+                if signal_num == 15:
+                    signal_info += " - SIGTERM, likely killed by system or OOM killer"
+                elif signal_num == 9:
+                    signal_info += " - SIGKILL, forcefully terminated"
+                signal_info += ")"
+            
+            error_msg = (
+                f"External caption job failed with exit code {return_code}{signal_info}.\n"
+                f"Command: {' '.join(shlex.quote(arg) for arg in cmd)}\n"
+                f"Working directory: {script_path.parents[1]}\n"
+                f"Script path: {script_path}\n"
+                f"Script exists: {script_path.exists()}\n"
+                f"Python executable: {sys.executable}\n"
+                f"Log file: {log_path}\n"
+                f"Log file exists: {log_file_exists}\n"
             )
+            if log_content:
+                error_msg += f"\nLast 50 lines of log:\n{log_content}"
+            else:
+                error_msg += "\n(No log content available - process may have been killed before writing output)"
+            raise RuntimeError(error_msg)
 
     def get_item(self, variation: int, index: int, requested_name: str = None) -> Dict[str, Any]:
         # Compute caption output name (may be called before __init__ completes)
