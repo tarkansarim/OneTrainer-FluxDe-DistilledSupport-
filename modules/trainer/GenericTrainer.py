@@ -47,6 +47,7 @@ import huggingface_hub
 from requests.exceptions import ConnectionError
 from tqdm import tqdm
 
+from mgds.pipelineModuleTypes.RandomAccessPipelineModule import RandomAccessPipelineModule
 
 class GenericTrainer(BaseTrainer):
     model_loader: BaseModelLoader
@@ -898,33 +899,58 @@ class GenericTrainer(BaseTrainer):
         for _epoch in tqdm(epochs, desc="epoch") if multi.is_master() else epochs:
             self.callbacks.on_update_status("Starting epoch/caching")
 
-            #call start_next_epoch. For detail crops with distributed captioning, we want all ranks
-            # to execute simultaneously (not master-first), so we skip the sequential wrapper.
-            # master_first() is only needed if we're writing to shared latent cache, but crops/captions
-            # use sharding and separate files, so parallelism is safe.
-            # We detect this by checking if detail crops are enabled in the config.
+            # For detail crops with distributed captioning:
+            # 1. Start crop/caption generation in parallel (all ranks simultaneously)
+            # 2. After crops/captions complete (they have internal barriers), switch to master_first for latent caching
             use_parallel_start = detail_crops_parallel_hint
             
             if use_parallel_start and multi.world_size() > 1:
-                # Parallel execution for all ranks (detail crops + captions)
-                if self.config.latent_caching:
-                    try:
-                        self.data_loader.get_data_set().start_next_epoch()
-                    except Exception as e:
-                        print(f"[Trainer] ERROR in start_next_epoch(): {e}")
-                        traceback.print_exc()
+                # Step 1: Start detail crop and caption modules in parallel (DO NOT TOUCH - working correctly)
+                from modules.dataLoader.pipelineModules import DetailCropGenerator, CropCaptionGenerator
+                
+                data_set = self.data_loader.get_data_set()
+                loading_pipeline = data_set.loading_pipeline
+                current_epoch = self.model.train_progress.epoch
+                
+                # Start crop/caption modules in parallel (all ranks simultaneously)
+                for module in loading_pipeline.modules:
+                    module_type = type(module).__name__
+                    if isinstance(module, (DetailCropGenerator, CropCaptionGenerator)):
+                        is_random_access = isinstance(module, RandomAccessPipelineModule)
+                        already_started = module.started if hasattr(module, 'started') else False
+                        print(f"[Rank {multi.rank()}] Found {module_type}: is_random_access={is_random_access}, already_started={already_started}")
                         sys.stdout.flush()
-                        raise
-                    self.model_setup.setup_train_device(self.model, self.config)
-                else:
-                    self.model_setup.setup_train_device(self.model, self.config)
-                    try:
-                        self.data_loader.get_data_set().start_next_epoch()
-                    except Exception as e:
-                        print(f"[Trainer] ERROR in start_next_epoch(): {e}")
-                        traceback.print_exc()
-                        sys.stdout.flush()
-                        raise
+                        if isinstance(module, RandomAccessPipelineModule) and not module.started:
+                            print(f"[Rank {multi.rank()}] Starting {module_type} for epoch {current_epoch}")
+                            sys.stdout.flush()
+                            module.start(current_epoch)
+                            module.started = True
+                            print(f"[Rank {multi.rank()}] Completed starting {module_type}")
+                            sys.stdout.flush()
+                
+                # Crop/caption modules have internal barriers, so all ranks are synchronized here
+                
+                # Step 2: Now switch to native OneTrainer behavior for latent caching (sequential/master_first)
+                for _ in multi.master_first():
+                    if self.config.latent_caching:
+                        try:
+                            # start_next_epoch() will skip already-started modules (crops/captions) and only start latent cache
+                            self.data_loader.get_data_set().start_next_epoch()
+                        except Exception as e:
+                            print(f"[Trainer] ERROR in start_next_epoch(): {e}")
+                            traceback.print_exc()
+                            sys.stdout.flush()
+                            raise
+                        self.model_setup.setup_train_device(self.model, self.config)
+                    else:
+                        self.model_setup.setup_train_device(self.model, self.config)
+                        try:
+                            self.data_loader.get_data_set().start_next_epoch()
+                        except Exception as e:
+                            print(f"[Trainer] ERROR in start_next_epoch(): {e}")
+                            traceback.print_exc()
+                            sys.stdout.flush()
+                            raise
             else:
                 # Standard master_first execution (sequential for safety when writing to shared cache)
                 for _ in multi.master_first():
@@ -1018,7 +1044,7 @@ class GenericTrainer(BaseTrainer):
 
                 if self.__needs_gc(train_progress):
                     torch_gc()
-                
+
                 if not has_gradient:
                     if len(self.sample_queue) > 0:
                         self.__execute_sample_during_training()
