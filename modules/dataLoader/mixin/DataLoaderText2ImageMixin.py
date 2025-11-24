@@ -1,12 +1,14 @@
 import re
 from collections.abc import Callable
+from typing import List, Optional
 
 import modules.util.multi_gpu_util as multi
 from modules.util import path_util
 from modules.util.config.TrainConfig import TrainConfig
 from modules.util.enum.DataType import DataType
 
-from modules.dataLoader.pipelineModules import CropCaptionGenerator, DetailCropGenerator
+from modules.dataLoader.pipelineModules.CropCaptionGenerator import CaptionGPUConfig, CropCaptionGenerator
+from modules.dataLoader.pipelineModules.DetailCropGenerator import DetailCropGenerator
 
 from mgds.OutputPipelineModule import OutputPipelineModule
 from mgds.pipelineModules.AspectBatchSorting import AspectBatchSorting
@@ -167,6 +169,8 @@ class DataLoaderText2ImageMixin:
             ],
         )
 
+        caption_gpu_config = self._build_caption_gpu_config(config)
+
         caption_module = CropCaptionGenerator(
             image_name='image',
             concept_name='concept',
@@ -177,9 +181,67 @@ class DataLoaderText2ImageMixin:
                 'custom_conditioning_image',
                 'depth',
             ],
+            caption_gpu_config=caption_gpu_config,
         )
 
         return [detail_module, caption_module]
+
+    def _build_caption_gpu_config(self, config: TrainConfig) -> Optional[CaptionGPUConfig]:
+        device_indexes = self._resolve_caption_device_indexes(config)
+        if len(device_indexes) < 2:
+            return None
+        return CaptionGPUConfig(enabled=True, device_indices=device_indexes, base_port=12134)
+
+    def _resolve_caption_device_indexes(self, config: TrainConfig) -> List[int]:
+        # Check cloud config first (for cloud training)
+        cloud = getattr(config, "cloud", None)
+        if cloud and getattr(cloud, "enabled", False) and getattr(cloud, "multi_gpu", False):
+            indexes = self._parse_device_index_string(getattr(cloud, "device_indexes", ""))
+            if indexes:
+                return indexes
+            gpu_count = int(getattr(cloud, "gpu_count", 0) or 0)
+            if gpu_count > 1:
+                return list(range(gpu_count))
+        
+        # Also check regular multi_gpu config (for remote training where cloud.enabled=False)
+        # This handles the case where training is on cloud but config.cloud.enabled is False on remote
+        if getattr(config, "multi_gpu", False):
+            indexes = self._parse_device_index_string(getattr(config, "device_indexes", ""))
+            if indexes:
+                return indexes
+            # If device_indexes not set but multi_gpu is True, detect available GPUs
+            try:
+                import torch
+                if torch.cuda.is_available():
+                    gpu_count = torch.cuda.device_count()
+                    if gpu_count > 1:
+                        return list(range(gpu_count))
+            except Exception:
+                pass
+        
+        # Fallback to device_indexes from config
+        return self._parse_device_index_string(getattr(config, "device_indexes", ""))
+
+    @staticmethod
+    def _parse_device_index_string(value: Optional[str]) -> List[int]:
+        if not value:
+            return []
+        tokens = value.replace(";", ",").split(",")
+        result: List[int] = []
+        seen = set()
+        for token in tokens:
+            token = token.strip()
+            if not token:
+                continue
+            try:
+                idx = int(token)
+            except ValueError:
+                continue
+            if idx in seen:
+                continue
+            seen.add(idx)
+            result.append(idx)
+        return result
 
     def _aspect_bucketing_in(self, config: TrainConfig, aspect_bucketing_quantization: int, frame_dim_enabled:bool=False):
         calc_aspect = CalcAspect(image_in_name='image', resolution_out_name='original_resolution')
