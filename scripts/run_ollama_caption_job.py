@@ -267,10 +267,7 @@ def main() -> int:
     except KeyboardInterrupt:
         # If we're interrupted during cleanup, just continue
         print(f"[CaptionJob] Cleanup interrupted, continuing anyway", flush=True)
-    unique_models = sorted({job.get("model") for job in jobs if job.get("model")})
-    for model in unique_models:
-        ensure_model_available(model)
-
+    
     manager = MultiOllamaManager(gpu_indices, base_port=base_port, show_console=show_console)
     hosts: List[str] = []
     try:
@@ -278,6 +275,11 @@ def main() -> int:
         hosts = manager.get_hosts()
         if not hosts:
             raise RuntimeError("No Ollama hosts were started; check Ollama installation and logs.")
+        
+        # Pull models AFTER Ollama servers are started (they need a server to connect to)
+        unique_models = sorted({job.get("model") for job in jobs if job.get("model")})
+        for model in unique_models:
+            ensure_model_available(model)
         buckets = chunk_jobs(jobs, len(hosts))
 
         with ThreadPoolExecutor(max_workers=len(hosts)) as executor:
