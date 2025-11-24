@@ -126,15 +126,29 @@ def ensure_model_available(model: str, timeout: float = 300.0) -> None:
     if not model:
         return
     try:
-        subprocess.run(
+        result = subprocess.run(
             ["ollama", "pull", model],
             check=True,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
             timeout=timeout,
+            text=True,
         )
+        # Log success (but only if there's output, to avoid spam)
+        if result.stdout:
+            print(f"[CaptionJob] Model '{model}' pulled successfully", flush=True)
     except subprocess.CalledProcessError as exc:
-        raise RuntimeError(f"ollama pull failed for model '{model}'. Exit code {exc.returncode}.") from exc
+        # Capture the actual error output (already text since text=True)
+        stderr_output = exc.stderr if exc.stderr else "No error output captured"
+        stdout_output = exc.stdout if exc.stdout else ""
+        error_msg = f"ollama pull failed for model '{model}'. Exit code {exc.returncode}."
+        if stderr_output and stderr_output.strip():
+            error_msg += f"\nError output: {stderr_output.strip()}"
+        if stdout_output and stdout_output.strip():
+            error_msg += f"\nOutput: {stdout_output.strip()}"
+        raise RuntimeError(error_msg) from exc
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeError(f"ollama pull timed out after {timeout} seconds for model '{model}'") from exc
     except FileNotFoundError as exc:
         raise RuntimeError("Unable to locate the 'ollama' CLI. Install Ollama or add it to PATH.") from exc
 
