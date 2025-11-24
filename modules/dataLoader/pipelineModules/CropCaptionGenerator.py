@@ -377,35 +377,9 @@ class CropCaptionGenerator(PipelineModule, RandomAccessPipelineModule):
         if not manifest_path:
             return
         
-        # Try multiple path resolution strategies to find the script
-        # Strategy 1: Relative to this file (CropCaptionGenerator.py is at modules/dataLoader/pipelineModules/)
         script_path = Path(__file__).resolve().parents[3] / "scripts" / "run_ollama_caption_job.py"
-        
-        # Strategy 2: If not found, try relative to current working directory
         if not script_path.exists():
-            cwd_script = Path.cwd() / "scripts" / "run_ollama_caption_job.py"
-            if cwd_script.exists():
-                script_path = cwd_script
-        
-        # Strategy 3: Try to find it by searching from common locations
-        if not script_path.exists():
-            # Check if we're in a OneTrainer-Plus directory
-            current = Path(__file__).resolve()
-            while current != current.parent:
-                potential_script = current / "scripts" / "run_ollama_caption_job.py"
-                if potential_script.exists():
-                    script_path = potential_script
-                    break
-                current = current.parent
-        
-        if not script_path.exists():
-            error_msg = (
-                f"Unable to locate external caption runner at {script_path}. "
-                f"Please ensure the file 'scripts/run_ollama_caption_job.py' exists in the repository. "
-                f"Current working directory: {Path.cwd()}, "
-                f"File location: {Path(__file__).resolve()}"
-            )
-            raise RuntimeError(error_msg)
+            raise RuntimeError(f"Unable to locate external caption runner at {script_path}")
         log_path = manifest_info.get("log_path") or str(script_path.with_suffix(".log"))
         os.makedirs(os.path.dirname(log_path), exist_ok=True)
         cmd = [
