@@ -910,7 +910,14 @@ class GenericTrainer(BaseTrainer):
                 
                 data_set = self.data_loader.get_data_set()
                 loading_pipeline = data_set.loading_pipeline
-                current_epoch = self.model.train_progress.epoch
+                
+                # Manually increment epoch counter (mimicking what LoadingPipeline.start_next_epoch does)
+                loading_pipeline._LoadingPipeline__current_epoch += 1
+                next_epoch = loading_pipeline._LoadingPipeline__current_epoch
+                
+                # Clear item caches for all modules (mimicking what LoadingPipeline does)
+                for module in loading_pipeline.modules:
+                    module.clear_item_cache()
                 
                 # Start crop/caption modules in parallel (all ranks simultaneously)
                 for module in loading_pipeline.modules:
@@ -921,9 +928,9 @@ class GenericTrainer(BaseTrainer):
                         print(f"[Rank {multi.rank()}] Found {module_type}: is_random_access={is_random_access}, already_started={already_started}")
                         sys.stdout.flush()
                         if isinstance(module, RandomAccessPipelineModule) and not module.started:
-                            print(f"[Rank {multi.rank()}] Starting {module_type} for epoch {current_epoch}")
+                            print(f"[Rank {multi.rank()}] Starting {module_type} for epoch {next_epoch}")
                             sys.stdout.flush()
-                            module.start(current_epoch)
+                            module.start(next_epoch)
                             module.started = True
                             print(f"[Rank {multi.rank()}] Completed starting {module_type}")
                             sys.stdout.flush()
@@ -931,10 +938,16 @@ class GenericTrainer(BaseTrainer):
                 # Crop/caption modules have internal barriers, so all ranks are synchronized here
                 
                 # Step 2: Now switch to native OneTrainer behavior for latent caching (sequential/master_first)
+                # We already incremented the epoch, so decrement it so start_next_epoch() can increment it again
+                loading_pipeline._LoadingPipeline__current_epoch -= 1
+                
                 for _ in multi.master_first():
                     if self.config.latent_caching:
                         try:
-                            # start_next_epoch() will skip already-started modules (crops/captions) and only start latent cache
+                            # start_next_epoch() will:
+                            # 1. Increment epoch (to the correct value)
+                            # 2. Skip already-started modules (crops/captions)  
+                            # 3. Start latent cache modules sequentially (master rank only)
                             self.data_loader.get_data_set().start_next_epoch()
                         except Exception as e:
                             print(f"[Trainer] ERROR in start_next_epoch(): {e}")
