@@ -155,6 +155,14 @@ class CropCaptionGenerator(PipelineModule, RandomAccessPipelineModule):
         self._flush_metrics()
         self._current_variation = variation
         self._metrics = self._new_metrics()
+        
+        # Wait for DetailCropGenerator to finish generating crops before querying length
+        # In multi-GPU, ensure all ranks have crops populated
+        rank, world_size, distributed_ready = self._distributed_status()
+        if distributed_ready:
+            import torch
+            torch.distributed.barrier()
+        
         total = self.length()
         print(f"[Detail Captions] start() called for epoch {variation}, total crops: {total}")
         sys.stdout.flush()
@@ -162,8 +170,6 @@ class CropCaptionGenerator(PipelineModule, RandomAccessPipelineModule):
         self._has_shutdown_ollama = False
         super().clear_item_cache()
         self._pregeneration_complete = False
-
-        rank, world_size, distributed_ready = self._distributed_status()
 
         if total <= 0:
             print(f"[Detail Captions] Returning early: total={total} (no crops to caption)")
