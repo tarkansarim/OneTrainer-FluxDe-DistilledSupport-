@@ -926,6 +926,11 @@ class GenericTrainer(BaseTrainer):
                             module.start(next_epoch)
                             module.started = True
                 
+                # Synchronize after detail crop generation completes on all ranks
+                # This ensures crop entries are populated before caption module queries length
+                if torch.distributed.is_initialized():
+                    torch.distributed.barrier()
+                
                 # Now start caption module (captions depend on crops being populated)
                 for module in loading_pipeline.modules:
                     if isinstance(module, CropCaptionGenerator):
