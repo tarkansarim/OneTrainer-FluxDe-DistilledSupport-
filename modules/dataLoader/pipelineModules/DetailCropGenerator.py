@@ -103,8 +103,12 @@ class DetailCropGenerator(PipelineModule, RandomAccessPipelineModule):
     def length(self) -> int:
         # If entries haven't been populated yet (start() not called), populate them now
         if not self._entries:
+            print(f"[Detail Crops] length() called with no entries, calling start(0) to populate...")
+            sys.stdout.flush()
             self.start(0)  # Use variation 0 for length calculation
         result = len(self._entries)
+        print(f"[Detail Crops] length() returning {result} entries")
+        sys.stdout.flush()
         return result
 
     def get_inputs(self) -> List[str]:

@@ -135,6 +135,8 @@ class CropCaptionGenerator(PipelineModule, RandomAccessPipelineModule):
         self._current_variation = variation
         self._metrics = self._new_metrics()
         total = self.length()
+        print(f"[Detail Captions] start() called for epoch {variation}, total crops: {total}")
+        sys.stdout.flush()
         self._reset_progress(f"[Detail Captions] Epoch {variation}", total)
         self._has_shutdown_ollama = False
         super().clear_item_cache()
@@ -143,6 +145,8 @@ class CropCaptionGenerator(PipelineModule, RandomAccessPipelineModule):
         rank, world_size, distributed_ready = self._distributed_status()
 
         if total <= 0:
+            print(f"[Detail Captions] Returning early: total={total} (no crops to caption)")
+            sys.stdout.flush()
             self._pregeneration_complete = True
             return
 
