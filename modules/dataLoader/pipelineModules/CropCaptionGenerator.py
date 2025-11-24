@@ -1072,7 +1072,8 @@ class CropCaptionGenerator(PipelineModule, RandomAccessPipelineModule):
             return
         
         # Only print progress if enabled, to reduce noise when acting as passthrough
-        if not self._caption_gpu_config.enabled: # Wait, caption_gpu_config is optional and about GPU
+        # Note: _caption_gpu_config can be None when multi-GPU captioning is not configured
+        if self._caption_gpu_config is not None and not self._caption_gpu_config.enabled:
              # We should check the concept config but we don't have it here easily without fetching upstream?
              # But wait, _finalize_output passes detail_cfg.
              pass
