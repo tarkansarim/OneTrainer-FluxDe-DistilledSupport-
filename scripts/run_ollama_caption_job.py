@@ -141,6 +141,8 @@ def ensure_model_available(model: str, host: str = None, timeout: float = 300.0)
             stderr=subprocess.PIPE,
             timeout=timeout,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             env=env,
         )
         # Log success (but only if there's output, to avoid spam)
@@ -296,7 +298,10 @@ def main() -> int:
             futures = []
             for idx, host in enumerate(hosts):
                 bucket = buckets[idx] if idx < len(buckets) else []
-                futures.append(executor.submit(process_bucket, host, bucket, args.max_image_side, idx))
+                # Use actual GPU index instead of list index for worker_id
+                # This makes it clear which GPU is actually being used
+                gpu_index = gpu_indices[idx] if idx < len(gpu_indices) else idx
+                futures.append(executor.submit(process_bucket, host, bucket, args.max_image_side, gpu_index))
             for future in futures:
                 future.result()
     finally:
